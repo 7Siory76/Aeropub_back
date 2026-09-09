@@ -1,6 +1,28 @@
 const db = require('../config/db');
 
 class SupportModel {
+  static async resolveIdTypeEtat(etatOrId) {
+    if (!etatOrId) {
+      const res = await db.query("SELECT id FROM Type_Etat_Support WHERE LOWER(nom_etat) = 'disponible' LIMIT 1");
+      return res.rows[0]?.id || 1;
+    }
+    if (typeof etatOrId === 'number' || (!isNaN(Number(etatOrId)) && String(etatOrId).trim() !== '')) {
+      return parseInt(etatOrId, 10);
+    }
+    const cleanNom = String(etatOrId).trim();
+    const res = await db.query('SELECT id FROM Type_Etat_Support WHERE LOWER(nom_etat) = LOWER($1) LIMIT 1', [cleanNom]);
+    if (res.rows.length > 0) {
+      return res.rows[0].id;
+    }
+    try {
+      const created = await db.query('INSERT INTO Type_Etat_Support (nom_etat) VALUES ($1) RETURNING id', [cleanNom]);
+      return created.rows[0].id;
+    } catch {
+      const fallback = await db.query('SELECT id FROM Type_Etat_Support LIMIT 1');
+      return fallback.rows[0]?.id || 1;
+    }
+  }
+
   static async getAll() {
     const query = `
       SELECT 
@@ -22,8 +44,9 @@ class SupportModel {
         aero.nom AS nom_aeroport,
         peri.nom AS nom_perimetre,
         CONCAT(aero.nom, ' - ', peri.nom) AS type_zone,
-        COALESCE(es.etat, 'Disponible') AS statut,
-        COALESCE(es.etat, 'Disponible') AS etat,
+        COALESCE(es.etat, 'disponible') AS statut,
+        COALESCE(es.etat, 'disponible') AS etat,
+        es.id_type_etat,
         es.observation,
         es.date_debut AS date_etat,
         1 AS quantite
@@ -34,10 +57,11 @@ class SupportModel {
       LEFT JOIN Categorie_Support cs ON s.id_categorie = cs.id
       LEFT JOIN Type_Support ts ON s.id_type = ts.id
       LEFT JOIN LATERAL (
-        SELECT etat, observation, date_debut, id_utilisateur
-        FROM Etat_Support
-        WHERE reference_support = s.reference
-        ORDER BY date_debut DESC, id DESC
+        SELECT es.id_type_etat, tes.nom_etat AS etat, es.observation, es.date_debut, es.id_utilisateur
+        FROM Etat_Support es
+        LEFT JOIN Type_Etat_Support tes ON es.id_type_etat = tes.id
+        WHERE es.reference_support = s.reference
+        ORDER BY es.date_debut DESC, es.id DESC
         LIMIT 1
       ) es ON true
       ORDER BY s.reference ASC
@@ -67,8 +91,9 @@ class SupportModel {
         aero.nom AS nom_aeroport,
         peri.nom AS nom_perimetre,
         CONCAT(aero.nom, ' - ', peri.nom) AS type_zone,
-        COALESCE(es.etat, 'Disponible') AS statut,
-        COALESCE(es.etat, 'Disponible') AS etat,
+        COALESCE(es.etat, 'disponible') AS statut,
+        COALESCE(es.etat, 'disponible') AS etat,
+        es.id_type_etat,
         es.observation,
         es.date_debut AS date_etat,
         1 AS quantite
@@ -79,10 +104,11 @@ class SupportModel {
       LEFT JOIN Categorie_Support cs ON s.id_categorie = cs.id
       LEFT JOIN Type_Support ts ON s.id_type = ts.id
       LEFT JOIN LATERAL (
-        SELECT etat, observation, date_debut, id_utilisateur
-        FROM Etat_Support
-        WHERE reference_support = s.reference
-        ORDER BY date_debut DESC, id DESC
+        SELECT es.id_type_etat, tes.nom_etat AS etat, es.observation, es.date_debut, es.id_utilisateur
+        FROM Etat_Support es
+        LEFT JOIN Type_Etat_Support tes ON es.id_type_etat = tes.id
+        WHERE es.reference_support = s.reference
+        ORDER BY es.date_debut DESC, es.id DESC
         LIMIT 1
       ) es ON true
       WHERE s.reference = $1
@@ -91,11 +117,10 @@ class SupportModel {
     return rows[0];
   }
 
-  static async create({ reference, id_zone, id_categorie, id_type, id_type_support, caracteristiques, statut, etat, observation, id_utilisateur }) {
+  static async create({ reference, id_zone, id_categorie, id_type, id_type_support, id_type_etat, caracteristiques, statut, etat, observation, id_utilisateur }) {
     const finalType = id_type || id_type_support || 1;
     const finalZone = id_zone || 1;
     const finalCat = id_categorie || 1;
-    const finalState = etat || statut || 'Disponible';
 
     // 1. Insérer le support
     const insertSupportQuery = `
@@ -103,7 +128,7 @@ class SupportModel {
       VALUES ($1, $2, $3, $4, $5)
       RETURNING *
     `;
-    const { rows } = await db.query(insertSupportQuery, [
+    await db.query(insertSupportQuery, [
       reference,
       parseInt(finalZone, 10),
       parseInt(finalCat, 10),
@@ -111,16 +136,17 @@ class SupportModel {
       caracteristiques || null
     ]);
 
-    // 2. Insérer l'état initial
+    // 2. Résoudre et insérer l'état initial
+    const resolvedIdEtat = await this.resolveIdTypeEtat(id_type_etat || etat || statut || 'disponible');
     await db.query(`
-      INSERT INTO Etat_Support (reference_support, etat, date_debut, id_utilisateur, observation)
+      INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, id_utilisateur, observation)
       VALUES ($1, $2, NOW(), $3, $4)
-    `, [reference, finalState, id_utilisateur || null, observation || null]);
+    `, [reference, resolvedIdEtat, id_utilisateur || null, observation || null]);
 
     return this.getByReference(reference);
   }
 
-  static async update(reference, { id_zone, id_categorie, id_type, id_type_support, caracteristiques, statut, etat, observation, id_utilisateur }) {
+  static async update(reference, { id_zone, id_categorie, id_type, id_type_support, id_type_etat, caracteristiques, statut, etat, observation, id_utilisateur }) {
     // 1. Mettre à jour les champs techniques du support si fournis
     if (id_zone || id_categorie || id_type || id_type_support || caracteristiques !== undefined) {
       const current = await this.getByReference(reference);
@@ -143,8 +169,10 @@ class SupportModel {
     }
 
     // 2. Mettre à jour l'historique d'état si un nouvel état ou une observation est fournie
-    const newState = etat || statut;
+    const newState = id_type_etat || etat || statut;
     if (newState || observation !== undefined) {
+      const resolvedIdEtat = await this.resolveIdTypeEtat(newState || 'disponible');
+
       // Clôturer l'état précédent actif
       await db.query(`
         UPDATE Etat_Support
@@ -154,11 +182,11 @@ class SupportModel {
 
       // Insérer le nouvel état
       await db.query(`
-        INSERT INTO Etat_Support (reference_support, etat, date_debut, id_utilisateur, observation)
+        INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, id_utilisateur, observation)
         VALUES ($1, $2, NOW(), $3, $4)
       `, [
         reference,
-        newState || 'Disponible',
+        resolvedIdEtat,
         id_utilisateur || null,
         observation || null
       ]);
@@ -176,8 +204,9 @@ class SupportModel {
 
   static async getHistoriqueEtats(reference) {
     const query = `
-      SELECT es.*, u.nom AS nom_utilisateur
+      SELECT es.*, tes.nom_etat AS etat, u.nom AS nom_utilisateur
       FROM Etat_Support es
+      LEFT JOIN Type_Etat_Support tes ON es.id_type_etat = tes.id
       LEFT JOIN Utilisateur u ON es.id_utilisateur = u.id
       WHERE es.reference_support = $1
       ORDER BY es.date_debut DESC

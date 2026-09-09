@@ -108,11 +108,25 @@ class CsvService {
                   caracteristiques = COALESCE(EXCLUDED.caracteristiques, Support.caracteristiques)
               `, [ref, zoneId, catId, tsId, caracteristiques || null]);
 
-              // 7. État du Support (Historique Zéro Perte)
+              // 7. État du Support (Historique Zéro Perte avec Type_Etat_Support)
+              const cleanStatut = String(statut || 'disponible').trim();
+              let idTypeEtat = 1;
+              const resEtat = await clientDb.query('SELECT id FROM Type_Etat_Support WHERE LOWER(nom_etat) = LOWER($1)', [cleanStatut]);
+              if (resEtat.rows.length > 0) {
+                idTypeEtat = resEtat.rows[0].id;
+              } else {
+                try {
+                  const insEtat = await clientDb.query('INSERT INTO Type_Etat_Support (nom_etat) VALUES ($1) ON CONFLICT (nom_etat) DO UPDATE SET nom_etat = EXCLUDED.nom_etat RETURNING id', [cleanStatut]);
+                  idTypeEtat = insEtat.rows[0]?.id || 1;
+                } catch {
+                  idTypeEtat = 1;
+                }
+              }
+
               await clientDb.query(`
-                INSERT INTO Etat_Support (reference_support, etat, date_debut, observation)
+                INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, observation)
                 VALUES ($1, $2, NOW(), $3)
-              `, [ref, statut, observation || null]);
+              `, [ref, idTypeEtat, observation || null]);
 
               countSupports++;
 
@@ -152,10 +166,16 @@ class CsvService {
                   ON CONFLICT DO NOTHING
                 `, [aboRef, ref]);
 
+                let idTypeStatut = 3;
+                const resStatut = await clientDb.query("SELECT id FROM Type_Statut_Abonnement WHERE LOWER(nom_statut) = 'actif' LIMIT 1");
+                if (resStatut.rows.length > 0) {
+                  idTypeStatut = resStatut.rows[0].id;
+                }
+
                 await clientDb.query(`
-                  INSERT INTO Statut_Abonnement (id_abonnement, statut, date_debut, commentaire)
-                  VALUES ($1, 'Actif', NOW(), 'Importé via fichier CSV')
-                `, [aboRef]);
+                  INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, commentaire)
+                  VALUES ($1, $2, NOW(), 'Importé via fichier CSV')
+                `, [aboRef, idTypeStatut]);
 
                 countAbonnements++;
               }

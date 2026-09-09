@@ -18,6 +18,8 @@ const utilisateurRoutes = require('./src/routes/utilisateurRoutes');
 const actionCommercialeRoutes = require('./src/routes/actionCommercialeRoutes');
 const documentRoutes = require('./src/routes/documentRoutes');
 const parametrageRoutes = require('./src/routes/parametrageRoutes');
+const typeEtatSupportRoutes = require('./src/routes/typeEtatSupportRoutes');
+const typeStatutAbonnementRoutes = require('./src/routes/typeStatutAbonnementRoutes');
 const ZoneController = require('./src/controllers/zoneController');
 
 const app = express();
@@ -47,6 +49,8 @@ app.use('/api/utilisateurs', utilisateurRoutes);
 app.use('/api/actions-commerciales', actionCommercialeRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/parametrages', parametrageRoutes);
+app.use('/api/types-etats-supports', typeEtatSupportRoutes);
+app.use('/api/types-statuts-abonnements', typeStatutAbonnementRoutes);
 
 // Route de santé (Health check)
 app.get('/api/health', (req, res) => {
@@ -69,8 +73,12 @@ app.use((req, res) => {
 const startServer = async () => {
   try {
     if (process.env.DATABASE_URL) {
-      await ArticleModel.initTable();
-      console.log('✅ Tables PostgreSQL AeroPub base_v3.sql initialisées avec succès.');
+      try {
+        await ArticleModel.initTable();
+        console.log('✅ Tables PostgreSQL AeroPub base_v3.sql initialisées avec succès.');
+      } catch (dbInitErr) {
+        console.warn('⚠️ Avertissement lors de l\'initialisation des tables:', dbInitErr.message);
+      }
     } else {
       console.warn('⚠️ DATABASE_URL manquant dans le fichier .env.');
     }

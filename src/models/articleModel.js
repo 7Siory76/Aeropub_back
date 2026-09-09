@@ -52,6 +52,12 @@ class ArticleModel {
           nom VARCHAR(50) UNIQUE 
       );
 
+      -- NOUVEAU : Référentiel des états possibles pour un support
+      CREATE TABLE IF NOT EXISTS Type_Etat_Support (
+          id SERIAL PRIMARY KEY,
+          nom_etat VARCHAR(50) UNIQUE
+      );
+
       CREATE TABLE IF NOT EXISTS Support (
           reference VARCHAR(50) PRIMARY KEY, 
           id_zone INT NOT NULL REFERENCES Zone_Terminal(id),
@@ -64,7 +70,7 @@ class ArticleModel {
       CREATE TABLE IF NOT EXISTS Etat_Support (
           id SERIAL PRIMARY KEY,
           reference_support VARCHAR(50) NOT NULL REFERENCES Support(reference) ON DELETE CASCADE,
-          etat VARCHAR(50) NOT NULL, 
+          id_type_etat INT NOT NULL REFERENCES Type_Etat_Support(id), 
           date_debut TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
           date_fin TIMESTAMP, 
           id_utilisateur INT REFERENCES Utilisateur(id), 
@@ -90,6 +96,12 @@ class ArticleModel {
       );
 
       -- 5. ABONNEMENTS
+      -- NOUVEAU : Référentiel des statuts possibles pour un abonnement
+      CREATE TABLE IF NOT EXISTS Type_Statut_Abonnement (
+          id SERIAL PRIMARY KEY,
+          nom_statut VARCHAR(50) UNIQUE
+      );
+
       CREATE TABLE IF NOT EXISTS Abonnement (
           reference VARCHAR(50) PRIMARY KEY,
           id_client INT NOT NULL REFERENCES Client(id) ON DELETE CASCADE,
@@ -118,7 +130,7 @@ class ArticleModel {
       CREATE TABLE IF NOT EXISTS Statut_Abonnement (
           id SERIAL PRIMARY KEY,
           id_abonnement VARCHAR(50) NOT NULL REFERENCES Abonnement(reference) ON DELETE CASCADE,
-          statut VARCHAR(50) NOT NULL,
+          id_type_statut INT NOT NULL REFERENCES Type_Statut_Abonnement(id),
           date_debut TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
           date_fin TIMESTAMP, 
           id_utilisateur INT REFERENCES Utilisateur(id),
@@ -155,6 +167,24 @@ class ArticleModel {
          nom_parametre VARCHAR(100) NOT NULL UNIQUE,
          valeur VARCHAR(255) NOT NULL
       );
+
+      -- Insertion des valeurs fixes de statuts uniquement si la table est vide
+      INSERT INTO Type_Statut_Abonnement (nom_statut)
+      SELECT s.nom FROM (VALUES 
+        ('brouillon'), ('à valider'), ('actif'), ('bientôt échu'), ('renouvelé'), ('expiré'), ('résilié'), ('archivé')
+      ) AS s(nom)
+      WHERE NOT EXISTS (SELECT 1 FROM Type_Statut_Abonnement LIMIT 1);
+
+      -- Insertion des valeurs fixes d'états uniquement si la table est vide
+      INSERT INTO Type_Etat_Support (nom_etat)
+      SELECT e.nom FROM (VALUES 
+        ('disponible'), ('réservé'), ('occupé'), ('en maintenance'), ('indisponible'), ('archivé')
+      ) AS e(nom)
+      WHERE NOT EXISTS (SELECT 1 FROM Type_Etat_Support LIMIT 1);
+
+      -- Synchronisation des séquences pour éviter tout conflit de clé primaire
+      SELECT setval(pg_get_serial_sequence('type_statut_abonnement', 'id'), COALESCE((SELECT MAX(id) FROM type_statut_abonnement), 1));
+      SELECT setval(pg_get_serial_sequence('type_etat_support', 'id'), COALESCE((SELECT MAX(id) FROM type_etat_support), 1));
 
       -- Table articles pour le module legacy si nécessaire
       CREATE TABLE IF NOT EXISTS articles (

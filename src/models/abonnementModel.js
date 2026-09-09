@@ -1,6 +1,28 @@
 const db = require('../config/db');
 
 class AbonnementModel {
+  static async resolveIdTypeStatut(statutOrId) {
+    if (!statutOrId) {
+      const res = await db.query("SELECT id FROM Type_Statut_Abonnement WHERE LOWER(nom_statut) = 'actif' LIMIT 1");
+      return res.rows[0]?.id || 3;
+    }
+    if (typeof statutOrId === 'number' || (!isNaN(Number(statutOrId)) && String(statutOrId).trim() !== '')) {
+      return parseInt(statutOrId, 10);
+    }
+    const cleanNom = String(statutOrId).trim();
+    const res = await db.query('SELECT id FROM Type_Statut_Abonnement WHERE LOWER(nom_statut) = LOWER($1) LIMIT 1', [cleanNom]);
+    if (res.rows.length > 0) {
+      return res.rows[0].id;
+    }
+    try {
+      const created = await db.query('INSERT INTO Type_Statut_Abonnement (nom_statut) VALUES ($1) RETURNING id', [cleanNom]);
+      return created.rows[0].id;
+    } catch {
+      const fallback = await db.query('SELECT id FROM Type_Statut_Abonnement LIMIT 1');
+      return fallback.rows[0]?.id || 3;
+    }
+  }
+
   static async getAll() {
     const query = `
       SELECT 
@@ -14,8 +36,9 @@ class AbonnementModel {
         a.date_echeance AS date_fin,
         COALESCE(sup.supports_list, '') AS supports_associes,
         COALESCE(sup.first_support, '') AS reference_emplacement,
-        COALESCE(st.statut, 'Actif') AS statut_abonnement,
-        COALESCE(st.statut, 'Actif') AS statut
+        COALESCE(st.statut, 'actif') AS statut_abonnement,
+        COALESCE(st.statut, 'actif') AS statut,
+        st.id_type_statut
       FROM Abonnement a
       LEFT JOIN Client cl ON a.id_client = cl.id
       LEFT JOIN Utilisateur u ON a.id_commercial = u.id
@@ -27,10 +50,11 @@ class AbonnementModel {
         WHERE id_abonnement = a.reference
       ) sup ON true
       LEFT JOIN LATERAL (
-        SELECT statut, commentaire, date_debut
-        FROM Statut_Abonnement
-        WHERE id_abonnement = a.reference
-        ORDER BY date_debut DESC, id DESC
+        SELECT sa.id_type_statut, tsa.nom_statut AS statut, sa.commentaire, sa.date_debut
+        FROM Statut_Abonnement sa
+        LEFT JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
+        WHERE sa.id_abonnement = a.reference
+        ORDER BY sa.date_debut DESC, sa.id DESC
         LIMIT 1
       ) st ON true
       ORDER BY a.date_creation DESC, a.reference ASC
@@ -52,8 +76,9 @@ class AbonnementModel {
         a.date_echeance AS date_fin,
         COALESCE(sup.supports_list, '') AS supports_associes,
         COALESCE(sup.first_support, '') AS reference_emplacement,
-        COALESCE(st.statut, 'Actif') AS statut_abonnement,
-        COALESCE(st.statut, 'Actif') AS statut
+        COALESCE(st.statut, 'actif') AS statut_abonnement,
+        COALESCE(st.statut, 'actif') AS statut,
+        st.id_type_statut
       FROM Abonnement a
       LEFT JOIN Client cl ON a.id_client = cl.id
       LEFT JOIN Utilisateur u ON a.id_commercial = u.id
@@ -65,10 +90,11 @@ class AbonnementModel {
         WHERE id_abonnement = a.reference
       ) sup ON true
       LEFT JOIN LATERAL (
-        SELECT statut, commentaire, date_debut
-        FROM Statut_Abonnement
-        WHERE id_abonnement = a.reference
-        ORDER BY date_debut DESC, id DESC
+        SELECT sa.id_type_statut, tsa.nom_statut AS statut, sa.commentaire, sa.date_debut
+        FROM Statut_Abonnement sa
+        LEFT JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
+        WHERE sa.id_abonnement = a.reference
+        ORDER BY sa.date_debut DESC, sa.id DESC
         LIMIT 1
       ) st ON true
       WHERE a.reference = $1 OR CAST(a.id_client AS VARCHAR) = $1
@@ -93,6 +119,8 @@ class AbonnementModel {
     preavis_jours,
     probabilite_renouvellement,
     motif_non_renouvellement,
+    id_type_statut,
+    statut,
     reference_support,
     reference_emplacement,
     supports = []
@@ -114,7 +142,6 @@ class AbonnementModel {
 
     // Vérifier s'il y a un conflit sur le support
     const targetSupport = reference_support || reference_emplacement || (supports && supports[0]);
-
     if (targetSupport) {
       const checkConflictQuery = `
         SELECT 
@@ -144,7 +171,7 @@ class AbonnementModel {
         const error = new Error(
           `Conflit de dates : le support ${targetSupport} est déjà réservé du ${debutStr} au ${finStr} (${conflict.raison_sociale || 'Contrat ' + conflict.reference}).`
         );
-        error.statusCode = 409; // HTTP 409 Conflict
+        error.statusCode = 409;
         throw error;
       }
     }
@@ -194,10 +221,11 @@ class AbonnementModel {
     }
 
     // Initialiser le statut d'abonnement
+    const resolvedIdStatut = await this.resolveIdTypeStatut(id_type_statut || statut || 'actif');
     await db.query(`
-      INSERT INTO Statut_Abonnement (id_abonnement, statut, date_debut, id_utilisateur, commentaire)
-      VALUES ($1, 'Actif', NOW(), $2, 'Création initiale du contrat')
-    `, [finalRef, finalCommercial]);
+      INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, id_utilisateur, commentaire)
+      VALUES ($1, $2, NOW(), $3, 'Création initiale du contrat')
+    `, [finalRef, resolvedIdStatut, finalCommercial]);
 
     return this.getById(finalRef);
   }
@@ -216,6 +244,7 @@ class AbonnementModel {
     preavis_jours,
     probabilite_renouvellement,
     motif_non_renouvellement,
+    id_type_statut,
     statut,
     reference_support,
     reference_emplacement
@@ -264,11 +293,13 @@ class AbonnementModel {
     }
 
     // Mettre à jour le statut si spécifié
-    if (statut) {
+    const newStatut = id_type_statut || statut;
+    if (newStatut) {
+      const resolvedIdStatut = await this.resolveIdTypeStatut(newStatut);
       await db.query(`
-        INSERT INTO Statut_Abonnement (id_abonnement, statut, date_debut, commentaire)
+        INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, commentaire)
         VALUES ($1, $2, NOW(), 'Mise à jour statut')
-      `, [reference, statut]);
+      `, [reference, resolvedIdStatut]);
     }
 
     return this.getById(reference);
