@@ -11,10 +11,14 @@ const localisationRoutes = require('./src/routes/localisationRoutes');
 const categorieRoutes = require('./src/routes/categorieRoutes');
 const formatRoutes = require('./src/routes/formatRoutes');
 const typeSupportRoutes = require('./src/routes/typeSupportRoutes');
+const supportRoutes = require('./src/routes/supportRoutes');
 const emplacementRoutes = require('./src/routes/emplacementRoutes');
-const publiciteRoutes = require('./src/routes/publiciteRoutes');
 const abonnementRoutes = require('./src/routes/abonnementRoutes');
+const utilisateurRoutes = require('./src/routes/utilisateurRoutes');
+const actionCommercialeRoutes = require('./src/routes/actionCommercialeRoutes');
+const documentRoutes = require('./src/routes/documentRoutes');
 const parametrageRoutes = require('./src/routes/parametrageRoutes');
+const ZoneController = require('./src/controllers/zoneController');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -28,21 +32,27 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/csv', csvRoutes);
 app.use('/api/articles', articleRoutes);
 app.use('/api/zones', zoneRoutes);
+app.get('/api/aeroports', ZoneController.getAllAeroports);
+app.get('/api/perimetres', ZoneController.getAllPerimetres);
 app.use('/api/clients', clientRoutes);
 app.use('/api/localisations', localisationRoutes);
 app.use('/api/categories', categorieRoutes);
 app.use('/api/formats', formatRoutes);
 app.use('/api/typesupports', typeSupportRoutes);
-app.use('/api/emplacements', emplacementRoutes);
+app.use('/api/supports', supportRoutes);
+app.use('/api/emplacements', emplacementRoutes); // Alias rétro-compatible
 app.use('/api/publicites', emplacementRoutes); // Alias rétro-compatible
 app.use('/api/abonnements', abonnementRoutes);
+app.use('/api/utilisateurs', utilisateurRoutes);
+app.use('/api/actions-commerciales', actionCommercialeRoutes);
+app.use('/api/documents', documentRoutes);
 app.use('/api/parametrages', parametrageRoutes);
 
 // Route de santé (Health check)
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     status: 'ok',
-    message: 'Le serveur API Back-Office AeroPub fonctionne correctement 🚀',
+    message: 'Le serveur API Back-Office AeroPub fonctionne correctement 🚀 (Schéma base_v3.sql)',
     timestamp: new Date().toISOString()
   });
 });
@@ -60,7 +70,7 @@ const startServer = async () => {
   try {
     if (process.env.DATABASE_URL) {
       await ArticleModel.initTable();
-      console.log('✅ Tables PostgreSQL AeroPub (Zone, Client, Localisation, Categorie, Format, TypeSupport, Emplacement, Abonnement, Parametrage) initialisées.');
+      console.log('✅ Tables PostgreSQL AeroPub base_v3.sql initialisées avec succès.');
     } else {
       console.warn('⚠️ DATABASE_URL manquant dans le fichier .env.');
     }

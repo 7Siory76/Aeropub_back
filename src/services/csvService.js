@@ -3,20 +3,17 @@ const csv = require('csv-parser');
 const pool = require('../config/db');
 
 /**
- * SERVICE : Traitement du fichier CSV Aeropub
-*/
-
+ * SERVICE : Traitement du fichier CSV AeroPub pour le schéma base_v3.sql
+ */
 class CsvService {
   /**
-   * Lit, analyse et insère le CSV d'emplacements et d'abonnements dans PostgreSQL
+   * Lit, analyse et insère le CSV dans PostgreSQL en respectant les relations de base_v3.sql
    * @param {string} filePath - Chemin vers le fichier CSV temporaire
    */
-
   static async processCsvFile(filePath) {
     const rawRows = [];
 
     return new Promise((resolve, reject) => {
-      //lecture du csv avec gestion automatique des delimitateur (, ou ;)
       fs.createReadStream(filePath)
         .pipe(csv({ separator: ',' }))
         .on('data', (row) => {
@@ -25,154 +22,166 @@ class CsvService {
         .on('end', async () => {
           const clientDb = await pool.connect();
           try {
-            console.log(`CSV lu :${rawRows.length} lignes trouvees.`);
+            console.log(`CSV lu : ${rawRows.length} lignes trouvées.`);
             await clientDb.query('BEGIN');
-            let countEmplacements = 0;
+            let countSupports = 0;
             let countAbonnements = 0;
 
             for (const row of rawRows) {
-              // Extraction des colonnes du csv
-              const ref = (row.Reference || '').trim();
-              const typeSupportNom = (row.Type_Support || row.type_support || '').trim();
-              const zoneNom = (row.Zone || row.zone || '').trim();
-              const lieuNom = (row.Localisation || row.localisation || '').trim();
-              const formatNom = (row.format || row.Format || '').trim();
-              const quantite = parseInt(row.Quantite || row.quantite || '1', 10);
-              const statut = (row.statut || row.Statut || 'disponible').trim();
-              const clientNom = (row.Nom_Client || row.nom_client || '').trim();
-              const dateDebut = (row.Date_Debut || row.date_debut || '').trim();
-              const dateFin = (row.Date_Fin || row.date_fin || '').trim();
-              const dureeContrat = (row.Duree_Contrat || row.duree_contrat || '').trim();
-              const refFacture = (row.Ref_Facture || row.ref_facture || '').trim();
-              const observation = (row.Observation || row.observation || '').trim();
-
+              const ref = (row.Reference || row.reference || row.Ref || '').trim();
               if (!ref) continue;
 
-              // obtenir ou creer la zone 
-              let zoneId = null;
-              if (zoneNom) {
-                let resZone = await clientDb.query('Select id From Zone WHERE LOWER(type_zone) = LOWER($1)', [zoneNom]);
-                zoneId = resZone.rows[0]?.id;
-                if (!zoneId) {
-                  const maxZ = await clientDb.query('SELECT COALESCE(MAX(id),0) + 1 AS next_id FROM Zone');
-                  const insZ = await clientDb.query('INSERT INTO Zone (id,type_zone) VALUES ($1,$2) RETURNING id', [maxZ.rows[0].next_id, zoneNom]);
-                  zoneId = insZ.rows[0].id;
-                }
+              const typeSupportNom = (row.Type_Support || row.type_support || row.Type || 'Standard').trim();
+              const catNom = (row.Categorie || row.categorie || row.Categorie_Support || 'Statique').trim();
+              const aeroNom = (row.Aeroport || row.aeroport || 'Ivato').trim();
+              const periNom = (row.Perimetre || row.perimetre || 'National').trim();
+              const zoneNom = (row.Zone || row.zone || row.Zone_Terminal || row.Localisation || row.localisation || 'Zone Générale').trim();
+              const caracteristiques = (row.Caracteristiques || row.caracteristiques || row.format || row.Format || row.Observation || '').trim();
+              const statut = (row.statut || row.Statut || row.etat || row.Etat || 'Disponible').trim();
+              const observation = (row.Observation || row.observation || '').trim();
+
+              const clientNom = (row.Nom_Client || row.nom_client || row.Client || row.Raison_Sociale || '').trim();
+              const contactVal = (row.Contact || row.contact || '').trim();
+              const dateDebut = (row.Date_Debut || row.date_debut || '').trim();
+              const dateFin = (row.Date_Fin || row.date_fin || row.Date_Echeance || row.date_echeance || '').trim();
+              const campagne = (row.Campagne || row.campagne || row.Annonceur || row.annonceur || row.Ref_Facture || row.ref_facture || '').trim();
+              const tarifVal = parseFloat(row.Tarif || row.tarif || row.Prix || row.prix || '0') || 0;
+
+              // 1. Aéroport
+              let aeroId = 1;
+              const resAero = await clientDb.query('SELECT id FROM Aeroport WHERE LOWER(nom) = LOWER($1)', [aeroNom]);
+              if (resAero.rows.length > 0) {
+                aeroId = resAero.rows[0].id;
+              } else {
+                const insA = await clientDb.query('INSERT INTO Aeroport (nom) VALUES ($1) ON CONFLICT (nom) DO UPDATE SET nom=EXCLUDED.nom RETURNING id', [aeroNom]);
+                aeroId = insA.rows[0].id;
               }
 
-              // obtenir ou creer la localisation
-              let locId = null;
-              if (lieuNom) {
-                let resLoc = await clientDb.query('select id FROM Localisation WHERE LOWER(nom_lieu) = LOWER($1)', [lieuNom]);
-                locId = resLoc.rows[0]?.id;
-                if (!locId) {
-                  const maxL = await clientDb.query('SELECT COALESCE(MAX(id),0) +1 AS nex_id FROM Localisation');
-                  const insL = await clientDb.query('INSERT INTO Localisation (id,nom_lieu, id_zone) VALUES ($1, $2, $3) RETURNING id', [maxL.rows[0].next_id, lieuNom, zoneId || 1]);
-                  locId = insL.rows[0].id;
-                }
+              // 2. Périmètre
+              let periId = 1;
+              const resPeri = await clientDb.query('SELECT id FROM Perimetre WHERE LOWER(nom) = LOWER($1)', [periNom]);
+              if (resPeri.rows.length > 0) {
+                periId = resPeri.rows[0].id;
+              } else {
+                const insP = await clientDb.query('INSERT INTO Perimetre (nom) VALUES ($1) ON CONFLICT (nom) DO UPDATE SET nom=EXCLUDED.nom RETURNING id', [periNom]);
+                periId = insP.rows[0].id;
               }
 
-              // obtenir ou creer le type de supoort 
-              let tsId = null;
-              if (typeSupportNom) {
-                let resTs = await clientDb.query('SELECT id from TypeSupport WHERE LOWER(nom_type) = LOWER($1)', [typeSupportNom]);
-                tsId = resTs.rows[0]?.id;
-                if (!tsId) {
-                  const maxTS = await clientDb.query('SELECT COALESCE(MAX(id), 0) +1 AS nex_id FROM TypeSupport');
-                  const insTS = await clientDb.query('INSERT INTO TypeSupport (id, nom_type ($1, $2) RETURNING id',
-                    [maxTS.rows[0].next_id, typeSupportNom]
-                  );
-                  tsId = insTS.rows[0].id;
-                }
+              // 3. Zone_Terminal
+              let zoneId = 1;
+              const resZone = await clientDb.query('SELECT id FROM Zone_Terminal WHERE LOWER(nom_zone) = LOWER($1)', [zoneNom]);
+              if (resZone.rows.length > 0) {
+                zoneId = resZone.rows[0].id;
+              } else {
+                const insZ = await clientDb.query('INSERT INTO Zone_Terminal (nom_zone, id_aeroport, id_perimetre) VALUES ($1, $2, $3) RETURNING id', [zoneNom, aeroId, periId]);
+                zoneId = insZ.rows[0].id;
               }
 
-              // obtenir ou creer le Format
-              let formatId = null;
-              if (formatNom) {
-                let resFmt = await clientDb.query('SELECT id from Format WHERE LOWER(ref_format) = LOWER($1)', [formatNom]);
-                formatId = resFmt.rows[0]?.id;
-                if (!formatId) {
-                  const maxF = await clientDb.query('SELECT COALESCE(MAX(id), 0) + 1 AS nex_id FROM Format');
-                  const insFmt = await clientDb.query('INSERT INTO Format (id, ref_format) VALUES ($1,$2) RETURNING id', [maxF.rows[0].next_id, formatNom]);
-                  formatId = insFmt.rows[0].id;
-                }
+              // 4. Catégorie Support
+              let catId = 1;
+              const resCat = await clientDb.query('SELECT id FROM Categorie_Support WHERE LOWER(nom) = LOWER($1)', [catNom]);
+              if (resCat.rows.length > 0) {
+                catId = resCat.rows[0].id;
+              } else {
+                const insC = await clientDb.query('INSERT INTO Categorie_Support (nom) VALUES ($1) ON CONFLICT (nom) DO UPDATE SET nom=EXCLUDED.nom RETURNING id', [catNom]);
+                catId = insC.rows[0].id;
               }
 
-              // sauvegarder ou mettre a jour l emplacement (UPSERT)
-              await clientDb.query(`INSERT INTO Emplacement (reference, id_format, id_type_support, id_localisation, id_categorie, quantite, statut, observation)
-                VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
+              // 5. Type Support
+              let tsId = 1;
+              const resTs = await clientDb.query('SELECT id FROM Type_Support WHERE LOWER(nom) = LOWER($1)', [typeSupportNom]);
+              if (resTs.rows.length > 0) {
+                tsId = resTs.rows[0].id;
+              } else {
+                const insTs = await clientDb.query('INSERT INTO Type_Support (nom) VALUES ($1) ON CONFLICT (nom) DO UPDATE SET nom=EXCLUDED.nom RETURNING id', [typeSupportNom]);
+                tsId = insTs.rows[0].id;
+              }
+
+              // 6. Support (UPSERT)
+              await clientDb.query(`
+                INSERT INTO Support (reference, id_zone, id_categorie, id_type, caracteristiques)
+                VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT (reference) DO UPDATE SET
-                  id_format = COALESCE(EXCLUDED.id_format, Emplacement.id_format),
-                  id_type_support = COALESCE(EXCLUDED.id_type_support, Emplacement.id_type_support),
-                  id_localisation = COALESCE(EXCLUDED.id_localisation, Emplacement.id_localisation),
-                  quantite = EXCLUDED.quantite,
-                  statut = EXCLUDED.statut,
-                  observation = EXCLUDED.observation
-              `, [ref, formatId || 1, tsId || 1, locId || 1, quantite, statut, observation]);
+                  id_zone = EXCLUDED.id_zone,
+                  id_categorie = EXCLUDED.id_categorie,
+                  id_type = EXCLUDED.id_type,
+                  caracteristiques = COALESCE(EXCLUDED.caracteristiques, Support.caracteristiques)
+              `, [ref, zoneId, catId, tsId, caracteristiques || null]);
 
+              // 7. État du Support (Historique Zéro Perte)
+              await clientDb.query(`
+                INSERT INTO Etat_Support (reference_support, etat, date_debut, observation)
+                VALUES ($1, $2, NOW(), $3)
+              `, [ref, statut, observation || null]);
 
-              countEmplacements++;
+              countSupports++;
 
-              // Sauvegarder le Client et l'Abonnement (si présent)
-              if (clientNom && dateDebut && dateFin) {
-                let resCli = await clientDb.query('SELECT id FROM Client WHERE LOWER(nom_client) = LOWER($1)', [clientNom]);
-                let clientId = resCli.rows[0]?.id;
-                if (!clientId) {
-                  const maxC = await clientDb.query('SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM Client');
-                  const insCli = await clientDb.query('INSERT INTO Client (id, nom_client) VALUES ($1, $2) RETURNING id', [maxC.rows[0].next_id, clientNom]);
+              // 8. Client & Abonnement (si présent dans la ligne)
+              if (clientNom && dateDebut) {
+                let clientId = 1;
+                const resCli = await clientDb.query('SELECT id FROM Client WHERE LOWER(raison_sociale) = LOWER($1)', [clientNom]);
+                if (resCli.rows.length > 0) {
+                  clientId = resCli.rows[0].id;
+                } else {
+                  const insCli = await clientDb.query('INSERT INTO Client (raison_sociale) VALUES ($1) RETURNING id', [clientNom]);
                   clientId = insCli.rows[0].id;
                 }
-                const maxAbo = await clientDb.query('SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM Abonnement');
+
+                if (contactVal) {
+                  await clientDb.query(`
+                    INSERT INTO Contact (id_client, nom_contact, valeur, est_principal)
+                    VALUES ($1, 'Contact Principal', $2, TRUE)
+                  `, [clientId, contactVal]);
+                }
+
+                const aboRef = `ABO-${ref}-${Date.now().toString().slice(-4)}`;
+                const dFin = dateFin || new Date(new Date(dateDebut).getTime() + 365 * 24 * 3600 * 1000).toISOString();
+
                 await clientDb.query(`
-                  INSERT INTO Abonnement (id, date_debut, date_fin, duree_contrat, ref_facture, reference_emplacement, id_client)
-                  VALUES ($1, $2, $3, $4, $5, $6, $7)
-                `, [
-                  maxAbo.rows[0].next_id,
-                  dateDebut,
-                  dateFin,
-                  dureeContrat || null,
-                  refFacture || null,
-                  ref,
-                  clientId
-                ]);
+                  INSERT INTO Abonnement (
+                    reference, id_client, id_commercial, annonceur_campagne, tarif,
+                    devise, periodicite, date_debut, date_echeance, reconduction_tacite
+                  )
+                  VALUES ($1, $2, 1, $3, $4, 'MGA', 'Annuel', $5, $6, FALSE)
+                  ON CONFLICT (reference) DO NOTHING
+                `, [aboRef, clientId, campagne || clientNom, tarifVal, dateDebut, dFin]);
+
+                await clientDb.query(`
+                  INSERT INTO Abonnement_Support (id_abonnement, reference_support)
+                  VALUES ($1, $2)
+                  ON CONFLICT DO NOTHING
+                `, [aboRef, ref]);
+
+                await clientDb.query(`
+                  INSERT INTO Statut_Abonnement (id_abonnement, statut, date_debut, commentaire)
+                  VALUES ($1, 'Actif', NOW(), 'Importé via fichier CSV')
+                `, [aboRef]);
+
                 countAbonnements++;
               }
             }
+
             await clientDb.query('COMMIT');
 
-
-            // Suppression du fichier temporaire
-            if (fs.existsSync(filePath)) {
-              fs.unlinkSync(filePath);
-            }
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
             resolve({
-              emplacementsImportes: countEmplacements,
+              emplacementsImportes: countSupports,
               abonnementsCrees: countAbonnements
             });
-
-
           } catch (dbError) {
             await clientDb.query('ROLLBACK');
-            if (fs.existsSync(filePath)) {
-              fs.unlinkSync(filePath);
-            }
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
             reject(dbError);
-
-
           } finally {
             clientDb.release();
           }
         })
         .on('error', (err) => {
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-          }
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
           reject(err);
         });
     });
   }
-
-
 }
 
 module.exports = CsvService;

@@ -45,6 +45,24 @@ class ZoneController {
       return res.status(error.statusCode || 500).json({ status: 'error', message: error.message });
     }
   }
+
+  static async getAllAeroports(req, res) {
+    try {
+      const data = await ZoneService.getAllAeroports();
+      return res.status(200).json({ status: 'success', count: data.length, data });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', message: error.message });
+    }
+  }
+
+  static async getAllPerimetres(req, res) {
+    try {
+      const data = await ZoneService.getAllPerimetres();
+      return res.status(200).json({ status: 'success', count: data.length, data });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', message: error.message });
+    }
+  }
 }
 
 module.exports = ZoneController;
