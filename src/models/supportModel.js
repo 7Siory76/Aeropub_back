@@ -49,6 +49,8 @@ class SupportModel {
         es.id_type_etat,
         es.observation,
         es.date_debut AS date_etat,
+        es.date_debut AS date_debut_etat,
+        es.date_fin AS date_fin_etat,
         1 AS quantite
       FROM Support s
       LEFT JOIN Zone_Terminal zt ON s.id_zone = zt.id
@@ -57,13 +59,21 @@ class SupportModel {
       LEFT JOIN Categorie_Support cs ON s.id_categorie = cs.id
       LEFT JOIN Type_Support ts ON s.id_type = ts.id
       LEFT JOIN LATERAL (
-        SELECT es.id_type_etat, tes.nom_etat AS etat, es.observation, es.date_debut, es.id_utilisateur
+        SELECT 
+          es.id_type_etat, 
+          tes.nom_etat AS etat, 
+          es.observation, 
+          es.date_debut, 
+          es.date_fin
         FROM Etat_Support es
         LEFT JOIN Type_Etat_Support tes ON es.id_type_etat = tes.id
         WHERE es.reference_support = s.reference
+          AND es.date_debut <= CURRENT_TIMESTAMP
+          AND (es.date_fin IS NULL OR es.date_fin >= CURRENT_TIMESTAMP)
         ORDER BY es.date_debut DESC, es.id DESC
         LIMIT 1
       ) es ON true
+
       ORDER BY s.reference ASC
     `;
     const { rows } = await db.query(query);
@@ -96,6 +106,8 @@ class SupportModel {
         es.id_type_etat,
         es.observation,
         es.date_debut AS date_etat,
+        es.date_debut AS date_debut_etat,
+        es.date_fin AS date_fin_etat,
         1 AS quantite
       FROM Support s
       LEFT JOIN Zone_Terminal zt ON s.id_zone = zt.id
@@ -104,10 +116,17 @@ class SupportModel {
       LEFT JOIN Categorie_Support cs ON s.id_categorie = cs.id
       LEFT JOIN Type_Support ts ON s.id_type = ts.id
       LEFT JOIN LATERAL (
-        SELECT es.id_type_etat, tes.nom_etat AS etat, es.observation, es.date_debut, es.id_utilisateur
+        SELECT 
+          es.id_type_etat, 
+          tes.nom_etat AS etat, 
+          es.observation, 
+          es.date_debut, 
+          es.date_fin
         FROM Etat_Support es
         LEFT JOIN Type_Etat_Support tes ON es.id_type_etat = tes.id
         WHERE es.reference_support = s.reference
+          AND es.date_debut <= CURRENT_TIMESTAMP
+          AND (es.date_fin IS NULL OR es.date_fin >= CURRENT_TIMESTAMP)
         ORDER BY es.date_debut DESC, es.id DESC
         LIMIT 1
       ) es ON true

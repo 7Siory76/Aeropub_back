@@ -103,6 +103,48 @@ class AbonnementModel {
     return rows[0];
   }
 
+  static async checkSupportConflict({ supportRef, excludeAboRef, dateDebut, dateFin }) {
+    if (!supportRef || !dateDebut || !dateFin) return null;
+
+    const query = `
+      SELECT 
+        a.reference, 
+        a.date_debut, 
+        a.date_echeance, 
+        cl.raison_sociale
+      FROM Abonnement a
+      JOIN Abonnement_Support asup ON asup.id_abonnement = a.reference
+      LEFT JOIN Client cl ON cl.id = a.id_client
+      LEFT JOIN LATERAL (
+        SELECT tsa.nom_statut
+        FROM Statut_Abonnement sa
+        JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
+        WHERE sa.id_abonnement = a.reference
+        ORDER BY sa.date_debut DESC, sa.id DESC
+        LIMIT 1
+      ) st ON true
+      WHERE asup.reference_support = $1
+        AND ($2::text IS NULL OR a.reference != $2)
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%archiv%'
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%r_sili%'
+        AND a.date_debut <= $4
+        AND a.date_echeance >= $3
+      LIMIT 1
+    `;
+
+    const res = await db.query(query, [
+      supportRef,
+      excludeAboRef || null,
+      dateDebut,
+      dateFin
+    ]);
+
+    if (res.rows.length > 0) {
+      return res.rows[0];
+    }
+    return null;
+  }
+
   static async create({
     reference,
     id_client,
@@ -125,7 +167,6 @@ class AbonnementModel {
     reference_emplacement,
     supports = []
   }) {
-    // Génération automatique d'une référence si non spécifiée
     let finalRef = reference;
     if (!finalRef) {
       const year = new Date().getFullYear();
@@ -140,36 +181,28 @@ class AbonnementModel {
     const finalDateDebut = date_debut || new Date();
     const finalDateEcheance = date_echeance || date_fin || new Date();
 
-    // Vérifier s'il y a un conflit sur le support
-    const targetSupport = reference_support || reference_emplacement || (supports && supports[0]);
-    if (targetSupport) {
-      const checkConflictQuery = `
-        SELECT 
-          a.reference, 
-          a.date_debut, 
-          a.date_echeance, 
-          cl.raison_sociale
-        FROM Abonnement a
-        JOIN Abonnement_Support asup ON asup.id_abonnement = a.reference
-        LEFT JOIN Client cl ON cl.id = a.id_client
-        WHERE asup.reference_support = $1
-          AND a.date_debut <= $3
-          AND a.date_echeance >= $2
-        LIMIT 1
-      `;
+    const allSupports = [];
+    if (reference_support) allSupports.push(reference_support);
+    if (reference_emplacement && !allSupports.includes(reference_emplacement)) allSupports.push(reference_emplacement);
+    if (Array.isArray(supports)) {
+      supports.forEach(s => {
+        const refStr = typeof s === 'string' ? s.trim() : (s.reference_support || s.reference || '').trim();
+        if (refStr && !allSupports.includes(refStr)) allSupports.push(refStr);
+      });
+    }
 
-      const conflictRes = await db.query(checkConflictQuery, [
-        targetSupport,
-        finalDateDebut,
-        finalDateEcheance
-      ]);
-
-      if (conflictRes.rows.length > 0) {
-        const conflict = conflictRes.rows[0];
+    for (const supRef of allSupports) {
+      const conflict = await this.checkSupportConflict({
+        supportRef: supRef,
+        excludeAboRef: null,
+        dateDebut: finalDateDebut,
+        dateFin: finalDateEcheance
+      });
+      if (conflict) {
         const debutStr = new Date(conflict.date_debut).toLocaleDateString('fr-FR');
         const finStr = new Date(conflict.date_echeance).toLocaleDateString('fr-FR');
         const error = new Error(
-          `Conflit de dates : le support ${targetSupport} est déjà réservé du ${debutStr} au ${finStr} (${conflict.raison_sociale || 'Contrat ' + conflict.reference}).`
+          `Conflit de dates : le support "${supRef}" n'est pas disponible du ${new Date(finalDateDebut).toLocaleDateString('fr-FR')} au ${new Date(finalDateEcheance).toLocaleDateString('fr-FR')} (déjà réservé du ${debutStr} au ${finStr} par ${conflict.raison_sociale || 'Contrat ' + conflict.reference}).`
         );
         error.statusCode = 409;
         throw error;
@@ -204,14 +237,6 @@ class AbonnementModel {
       motif_non_renouvellement || null
     ]);
 
-    // Lier les supports
-    const allSupports = [];
-    if (reference_support) allSupports.push(reference_support);
-    if (reference_emplacement && !allSupports.includes(reference_emplacement)) allSupports.push(reference_emplacement);
-    if (Array.isArray(supports)) {
-      supports.forEach(s => { if (s && !allSupports.includes(s)) allSupports.push(s); });
-    }
-
     for (const supRef of allSupports) {
       await db.query(`
         INSERT INTO Abonnement_Support (id_abonnement, reference_support)
@@ -220,12 +245,11 @@ class AbonnementModel {
       `, [finalRef, supRef]);
     }
 
-    // Initialiser le statut d'abonnement
-    const resolvedIdStatut = await this.resolveIdTypeStatut(id_type_statut || statut || 'actif');
+    const resolvedIdStatut = await this.resolveIdTypeStatut(id_type_statut || statut || 3);
     await db.query(`
-      INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, id_utilisateur, commentaire)
-      VALUES ($1, $2, NOW(), $3, 'Création initiale du contrat')
-    `, [finalRef, resolvedIdStatut, finalCommercial]);
+      INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, commentaire)
+      VALUES ($1, $2, CURRENT_TIMESTAMP, 'Création du contrat')
+    `, [finalRef, resolvedIdStatut]);
 
     return this.getById(finalRef);
   }
@@ -247,8 +271,116 @@ class AbonnementModel {
     id_type_statut,
     statut,
     reference_support,
-    reference_emplacement
+    reference_emplacement,
+    supports
   }) {
+    const currentAbo = await this.getById(reference);
+    if (!currentAbo) {
+      const error = new Error(`Abonnement "${reference}" introuvable.`);
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const targetDateDebut = date_debut || currentAbo.date_debut;
+    const targetDateFin = date_echeance || date_fin || currentAbo.date_echeance || currentAbo.date_fin;
+
+    if (supports !== undefined && Array.isArray(supports)) {
+      const currentStatut = String(currentAbo.statut_abonnement || currentAbo.statut || '').trim().toLowerCase();
+      const isLocked = currentStatut.includes('actif') || currentStatut.includes('archiv');
+
+      const currentSupportsRows = await db.query(
+        'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
+        [reference]
+      );
+      const currentSupList = currentSupportsRows.rows.map(r => r.reference_support).sort();
+      const newSupList = [...new Set(supports.map(s => String(s).trim()).filter(Boolean))].sort();
+
+      const hasChanged = JSON.stringify(currentSupList) !== JSON.stringify(newSupList);
+
+      if (hasChanged && isLocked) {
+        const error = new Error(
+          "L'abonnement est déjà actif (ou archivé) : la modification des supports liés requiert une autorisation de l'administrateur."
+        );
+        error.statusCode = 403;
+        throw error;
+      }
+
+      for (const supRef of newSupList) {
+        const conflict = await this.checkSupportConflict({
+          supportRef: supRef,
+          excludeAboRef: reference,
+          dateDebut: targetDateDebut,
+          dateFin: targetDateFin
+        });
+        if (conflict) {
+          const debutStr = new Date(conflict.date_debut).toLocaleDateString('fr-FR');
+          const finStr = new Date(conflict.date_echeance).toLocaleDateString('fr-FR');
+          const error = new Error(
+            `Le support "${supRef}" n'est pas disponible entre le ${new Date(targetDateDebut).toLocaleDateString('fr-FR')} et le ${new Date(targetDateFin).toLocaleDateString('fr-FR')} : déjà réservé du ${debutStr} au ${finStr} par ${conflict.raison_sociale || 'Contrat ' + conflict.reference}.`
+          );
+          error.statusCode = 409;
+          throw error;
+        }
+      }
+
+      if (hasChanged) {
+        await db.query('DELETE FROM Abonnement_Support WHERE id_abonnement = $1', [reference]);
+        for (const supRef of newSupList) {
+          await db.query(
+            'INSERT INTO Abonnement_Support (id_abonnement, reference_support) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+            [reference, supRef]
+          );
+        }
+      }
+    } else {
+      const supRef = reference_support || reference_emplacement;
+      if (supRef) {
+        const conflict = await this.checkSupportConflict({
+          supportRef: supRef,
+          excludeAboRef: reference,
+          dateDebut: targetDateDebut,
+          dateFin: targetDateFin
+        });
+        if (conflict) {
+          const debutStr = new Date(conflict.date_debut).toLocaleDateString('fr-FR');
+          const finStr = new Date(conflict.date_echeance).toLocaleDateString('fr-FR');
+          const error = new Error(
+            `Le support "${supRef}" n'est pas disponible entre le ${new Date(targetDateDebut).toLocaleDateString('fr-FR')} et le ${new Date(targetDateFin).toLocaleDateString('fr-FR')} : déjà réservé du ${debutStr} au ${finStr} par ${conflict.raison_sociale || 'Contrat ' + conflict.reference}.`
+          );
+          error.statusCode = 409;
+          throw error;
+        }
+
+        await db.query(`
+          INSERT INTO Abonnement_Support (id_abonnement, reference_support)
+          VALUES ($1, $2)
+          ON CONFLICT DO NOTHING
+        `, [reference, supRef]);
+      } else if (date_debut || date_echeance || date_fin) {
+        const currentSupportsRows = await db.query(
+          'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
+          [reference]
+        );
+        for (const row of currentSupportsRows.rows) {
+          const conflict = await this.checkSupportConflict({
+            supportRef: row.reference_support,
+            excludeAboRef: reference,
+            dateDebut: targetDateDebut,
+            dateFin: targetDateFin
+          });
+          if (conflict) {
+            const debutStr = new Date(conflict.date_debut).toLocaleDateString('fr-FR');
+            const finStr = new Date(conflict.date_echeance).toLocaleDateString('fr-FR');
+            const error = new Error(
+              `Le support "${row.reference_support}" est déjà réservé du ${debutStr} au ${finStr} par ${conflict.raison_sociale || 'Contrat ' + conflict.reference}. Impossible de modifier les dates du contrat.`
+            );
+            error.statusCode = 409;
+            throw error;
+          }
+        }
+      }
+    }
+
     const finalDateEcheance = date_echeance || date_fin;
 
     await db.query(`
@@ -281,16 +413,6 @@ class AbonnementModel {
       motif_non_renouvellement !== undefined ? motif_non_renouvellement : null,
       reference
     ]);
-
-    // Mettre à jour le support lié si spécifié
-    const supRef = reference_support || reference_emplacement;
-    if (supRef) {
-      await db.query(`
-        INSERT INTO Abonnement_Support (id_abonnement, reference_support)
-        VALUES ($1, $2)
-        ON CONFLICT DO NOTHING
-      `, [reference, supRef]);
-    }
 
     // Mettre à jour le statut si spécifié
     const newStatut = id_type_statut || statut;
