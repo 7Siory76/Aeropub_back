@@ -21,6 +21,7 @@ const parametrageRoutes = require('./src/routes/parametrageRoutes');
 const typeEtatSupportRoutes = require('./src/routes/typeEtatSupportRoutes');
 const typeStatutAbonnementRoutes = require('./src/routes/typeStatutAbonnementRoutes');
 const ZoneController = require('./src/controllers/zoneController');
+const journalRoutes = require('./src/routes/journalNotificationRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -51,6 +52,7 @@ app.use('/api/documents', documentRoutes);
 app.use('/api/parametrages', parametrageRoutes);
 app.use('/api/types-etats-supports', typeEtatSupportRoutes);
 app.use('/api/types-statuts-abonnements', typeStatutAbonnementRoutes);
+app.use('/api/notifications', journalRoutes);
 
 // Route de santé (Health check)
 app.get('/api/health', (req, res) => {

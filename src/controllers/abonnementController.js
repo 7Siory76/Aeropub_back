@@ -46,6 +46,15 @@ class AbonnementController {
       return res.status(error.statusCode || 500).json({ status: 'error', message: error.message });
     }
   }
+
+  static async getHistoriqueStatuts(req, res) {
+    try {
+      const data = await AbonnementService.getHistoriqueStatuts(req.params.id);
+      return res.status(200).json({ status: 'success', data });
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ status: 'error', message: error.message });
+    }
+  }
 }
 
 module.exports = AbonnementController;

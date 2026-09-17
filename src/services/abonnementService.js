@@ -37,6 +37,11 @@ class AbonnementService {
   static async getSupportsByAbonnement(id) {
     return AbonnementModel.getSupportsByAbonnement(id);
   }
+
+  static async getHistoriqueStatuts(id) {
+    await this.getById(id);
+    return AbonnementModel.getHistoriqueStatuts(id);
+  }
 }
 
 module.exports = AbonnementService;

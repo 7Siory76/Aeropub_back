@@ -1,4 +1,5 @@
 const db = require('../config/db');
+import JournalNotificationModel from './journalNotificationModel';
 
 class AbonnementModel {
   static async resolveIdTypeStatut(statutOrId) {
@@ -20,6 +21,89 @@ class AbonnementModel {
     } catch {
       const fallback = await db.query('SELECT id FROM Type_Statut_Abonnement LIMIT 1');
       return fallback.rows[0]?.id || 3;
+    }
+  }
+
+  static async cascadeStatutToSupports(referenceAbonnement, statutOrId) {
+    // 1. Récupérer les informations complètes du contrat d'abonnement
+    const aboRes = await db.query(
+      'SELECT reference, date_debut, date_echeance, date_creation FROM Abonnement WHERE reference = $1',
+      [referenceAbonnement]
+    );
+    const abo = aboRes.rows[0];
+    if (!abo) return;
+
+    let nomStatut = statutOrId;
+    if (!nomStatut) {
+      const lastStatut = await db.query(`
+        SELECT tsa.nom_statut 
+        FROM Statut_Abonnement sa
+        JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
+        WHERE sa.id_abonnement = $1
+        ORDER BY sa.id DESC LIMIT 1
+      `, [referenceAbonnement]);
+      nomStatut = lastStatut.rows[0]?.nom_statut || 'actif';
+    } else if (typeof statutOrId === 'number' || (!isNaN(Number(statutOrId)) && String(statutOrId).trim() !== '')) {
+      const res = await db.query('SELECT nom_statut FROM Type_Statut_Abonnement WHERE id = $1', [parseInt(statutOrId, 10)]);
+      nomStatut = res.rows[0]?.nom_statut || '';
+    }
+
+    const stClean = String(nomStatut).trim().toLowerCase();
+
+    // 2. Déterminer l'état du support correspondant
+    let targetEtatNom = 'disponible';
+    let targetEtatId = 1;
+    if (stClean === 'brouillon' || stClean.includes('valid')) {
+      targetEtatNom = 'réservé';
+      targetEtatId = 2;
+    } else if (stClean.includes('actif') || stClean.includes('renouv') || stClean.includes('échu') || stClean.includes('echu')) {
+      targetEtatNom = 'occupé';
+      targetEtatId = 3;
+    } else if (stClean.includes('maint')) {
+      targetEtatNom = 'en maintenance';
+      targetEtatId = 4;
+    } else {
+      // Expiré, résilié, archivé
+      targetEtatNom = 'disponible';
+      targetEtatId = 1;
+    }
+
+    // 3. Récupérer tous les supports liés au contrat
+    const supportsRows = await db.query(
+      'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
+      [referenceAbonnement]
+    );
+    const supportRefs = supportsRows.rows.map(r => r.reference_support);
+    if (supportRefs.length === 0) return;
+
+    // Date et heure de saisie actuelle
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const dateSaisieStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+    // 4. Mettre à jour l'historique Etat_Support pour chaque support
+    for (const supRef of supportRefs) {
+      // Clôturer l'ancien état ouvert s'il y en a un
+      await db.query(`
+        UPDATE Etat_Support 
+        SET date_fin = CURRENT_TIMESTAMP 
+        WHERE reference_support = $1 AND date_fin IS NULL
+      `, [supRef]);
+
+      // Insérer le nouvel état :
+      // - date_debut = date debut de l'abonnement
+      // - date_fin = date echeance de l'abonnement
+      // - observation = date de saisie + détails du contrat
+      await db.query(`
+        INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, date_fin, observation)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        supRef,
+        targetEtatId,
+        abo.date_debut,
+        abo.date_echeance,
+        `[Saisie le ${dateSaisieStr}] Contrat ${referenceAbonnement} : ${targetEtatNom} (Statut: ${nomStatut})`
+      ]);
     }
   }
 
@@ -54,7 +138,7 @@ class AbonnementModel {
         FROM Statut_Abonnement sa
         LEFT JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
         WHERE sa.id_abonnement = a.reference
-        ORDER BY sa.date_debut DESC, sa.id DESC
+        ORDER BY sa.id DESC
         LIMIT 1
       ) st ON true
       ORDER BY a.date_creation DESC, a.reference ASC
@@ -94,7 +178,7 @@ class AbonnementModel {
         FROM Statut_Abonnement sa
         LEFT JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
         WHERE sa.id_abonnement = a.reference
-        ORDER BY sa.date_debut DESC, sa.id DESC
+        ORDER BY sa.id DESC
         LIMIT 1
       ) st ON true
       WHERE a.reference = $1 OR CAST(a.id_client AS VARCHAR) = $1
@@ -246,17 +330,45 @@ class AbonnementModel {
     }
 
     const resolvedIdStatut = await this.resolveIdTypeStatut(id_type_statut || statut || 3);
-    await db.query(`
-      INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, commentaire)
-      VALUES ($1, $2, CURRENT_TIMESTAMP, 'Création du contrat')
-    `, [finalRef, resolvedIdStatut]);
+    const statutRes = await db.query('SELECT nom_statut FROM Type_Statut_Abonnement WHERE id = $1', [resolvedIdStatut]);
+    const nomStatut = statutRes.rows[0]?.nom_statut || 'Actif';
 
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const dateSaisieStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+    await db.query(`
+      INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, date_fin, commentaire)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [
+      finalRef,
+      resolvedIdStatut,
+      finalDateDebut,
+      finalDateEcheance,
+      `[Saisie le ${dateSaisieStr}] Création du contrat (${nomStatut})`
+    ]);
+
+    await this.cascadeStatutToSupports(finalRef, resolvedIdStatut);
+    await JournalNotificationModel.logAction({
+      id_utilisateur: finalCommercial,
+      categorie_action: 'CREATION',
+      entite_concernee: 'ABONNEMENT',
+      reference_entite: finalRef,
+      valeur_apres: {
+        reference: finalRef,
+        id_client: finalClient,
+        tarif: finalTarif,
+        supports: allSupports
+      },
+      message_notification: `Nouveau contrat ${finalRef} créé avec ${allSupports.length} support(s).`
+    });
     return this.getById(finalRef);
   }
 
   static async update(reference, {
     id_client,
     id_commercial,
+    id_abonnement_precedent,
     annonceur_campagne,
     tarif,
     devise,
@@ -396,8 +508,9 @@ class AbonnementModel {
           reconduction_tacite = COALESCE($9, reconduction_tacite),
           preavis_jours = COALESCE($10, preavis_jours),
           probabilite_renouvellement = COALESCE($11, probabilite_renouvellement),
-          motif_non_renouvellement = COALESCE($12, motif_non_renouvellement)
-      WHERE reference = $13
+          motif_non_renouvellement = COALESCE($12, motif_non_renouvellement),
+          id_abonnement_precedent = COALESCE($13, id_abonnement_precedent)
+      WHERE reference = $14
     `, [
       id_client ? parseInt(id_client, 10) : null,
       id_commercial ? parseInt(id_commercial, 10) : null,
@@ -411,6 +524,7 @@ class AbonnementModel {
       preavis_jours !== undefined ? parseInt(preavis_jours, 10) : null,
       probabilite_renouvellement !== undefined ? parseInt(probabilite_renouvellement, 10) : null,
       motif_non_renouvellement !== undefined ? motif_non_renouvellement : null,
+      id_abonnement_precedent !== undefined ? id_abonnement_precedent : null,
       reference
     ]);
 
@@ -418,10 +532,34 @@ class AbonnementModel {
     const newStatut = id_type_statut || statut;
     if (newStatut) {
       const resolvedIdStatut = await this.resolveIdTypeStatut(newStatut);
+      const statutRes = await db.query('SELECT nom_statut FROM Type_Statut_Abonnement WHERE id = $1', [resolvedIdStatut]);
+      const nomStatut = statutRes.rows[0]?.nom_statut || 'Actif';
+
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const dateSaisieStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+      // Clôturer le statut précédent
       await db.query(`
-        INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, commentaire)
-        VALUES ($1, $2, NOW(), 'Mise à jour statut')
-      `, [reference, resolvedIdStatut]);
+        UPDATE Statut_Abonnement 
+        SET date_fin = CURRENT_TIMESTAMP 
+        WHERE id_abonnement = $1 AND date_fin IS NULL
+      `, [reference]);
+
+      await db.query(`
+        INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, date_fin, commentaire)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        reference,
+        resolvedIdStatut,
+        targetDateDebut,
+        targetDateFin,
+        `[Saisie le ${dateSaisieStr}] Changement de statut vers ${nomStatut}`
+      ]);
+
+      await this.cascadeStatutToSupports(reference, resolvedIdStatut);
+    } else if (date_debut || date_echeance || date_fin || (supports !== undefined && Array.isArray(supports))) {
+      await this.cascadeStatutToSupports(reference);
     }
 
     return this.getById(reference);
@@ -444,6 +582,19 @@ class AbonnementModel {
       LEFT JOIN Type_Support ts ON s.id_type = ts.id
       LEFT JOIN Zone_Terminal zt ON s.id_zone = zt.id
       WHERE asup.id_abonnement = $1
+    `;
+    const { rows } = await db.query(query, [reference]);
+    return rows;
+  }
+
+  static async getHistoriqueStatuts(reference) {
+    const query = `
+      SELECT sa.*, tsa.nom_statut, u.nom AS nom_utilisateur
+      FROM Statut_Abonnement sa
+      LEFT JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
+      LEFT JOIN Utilisateur u ON sa.id_utilisateur = u.id
+      WHERE sa.id_abonnement = $1
+      ORDER BY sa.id DESC
     `;
     const { rows } = await db.query(query, [reference]);
     return rows;

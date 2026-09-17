@@ -70,7 +70,7 @@ class SupportModel {
         WHERE es.reference_support = s.reference
           AND es.date_debut <= CURRENT_TIMESTAMP
           AND (es.date_fin IS NULL OR es.date_fin >= CURRENT_TIMESTAMP)
-        ORDER BY es.date_debut DESC, es.id DESC
+        ORDER BY es.id DESC
         LIMIT 1
       ) es ON true
 
@@ -127,7 +127,7 @@ class SupportModel {
         WHERE es.reference_support = s.reference
           AND es.date_debut <= CURRENT_TIMESTAMP
           AND (es.date_fin IS NULL OR es.date_fin >= CURRENT_TIMESTAMP)
-        ORDER BY es.date_debut DESC, es.id DESC
+        ORDER BY es.id DESC
         LIMIT 1
       ) es ON true
       WHERE s.reference = $1
@@ -156,11 +156,16 @@ class SupportModel {
     ]);
 
     // 2. Résoudre et insérer l'état initial
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const dateSaisieStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    const obsText = observation ? `[Saisie le ${dateSaisieStr}] ${observation}` : `[Saisie le ${dateSaisieStr}] Création du support`;
+
     const resolvedIdEtat = await this.resolveIdTypeEtat(id_type_etat || etat || statut || 'disponible');
     await db.query(`
       INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, id_utilisateur, observation)
       VALUES ($1, $2, NOW(), $3, $4)
-    `, [reference, resolvedIdEtat, id_utilisateur || null, observation || null]);
+    `, [reference, resolvedIdEtat, id_utilisateur || null, obsText]);
 
     return this.getByReference(reference);
   }
@@ -187,28 +192,41 @@ class SupportModel {
       }
     }
 
-    // 2. Mettre à jour l'historique d'état si un nouvel état ou une observation est fournie
+    // 2. Mettre à jour l'historique d'état si un nouvel état ou une observation nouvelle est fournie
     const newState = id_type_etat || etat || statut;
     if (newState || observation !== undefined) {
-      const resolvedIdEtat = await this.resolveIdTypeEtat(newState || 'disponible');
+      const current = await this.getByReference(reference);
+      const resolvedIdEtat = await this.resolveIdTypeEtat(newState || current?.id_type_etat || 'disponible');
 
-      // Clôturer l'état précédent actif
-      await db.query(`
-        UPDATE Etat_Support
-        SET date_fin = NOW()
-        WHERE reference_support = $1 AND date_fin IS NULL
-      `, [reference]);
+      const cleanObs = (observation || '').replace(/^\[Saisie le [^\]]+\]\s*/, '').trim();
+      const currentCleanObs = (current?.observation || '').replace(/^\[Saisie le [^\]]+\]\s*/, '').trim();
+      const isEtatChanged = !current || current.id_type_etat !== resolvedIdEtat;
+      const isObsChanged = observation !== undefined && cleanObs !== currentCleanObs && cleanObs !== '';
 
-      // Insérer le nouvel état
-      await db.query(`
-        INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, id_utilisateur, observation)
-        VALUES ($1, $2, NOW(), $3, $4)
-      `, [
-        reference,
-        resolvedIdEtat,
-        id_utilisateur || null,
-        observation || null
-      ]);
+      if (isEtatChanged || isObsChanged) {
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const dateSaisieStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+        const obsText = cleanObs ? `[Saisie le ${dateSaisieStr}] ${cleanObs}` : `[Saisie le ${dateSaisieStr}] Mise à jour de l'état`;
+
+        // Clôturer l'état précédent actif
+        await db.query(`
+          UPDATE Etat_Support
+          SET date_fin = NOW()
+          WHERE reference_support = $1 AND date_fin IS NULL
+        `, [reference]);
+
+        // Insérer le nouvel état
+        await db.query(`
+          INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, id_utilisateur, observation)
+          VALUES ($1, $2, NOW(), $3, $4)
+        `, [
+          reference,
+          resolvedIdEtat,
+          id_utilisateur || null,
+          obsText
+        ]);
+      }
     }
 
     return this.getByReference(reference);
@@ -228,7 +246,7 @@ class SupportModel {
       LEFT JOIN Type_Etat_Support tes ON es.id_type_etat = tes.id
       LEFT JOIN Utilisateur u ON es.id_utilisateur = u.id
       WHERE es.reference_support = $1
-      ORDER BY es.date_debut DESC
+      ORDER BY es.id DESC
     `;
     const { rows } = await db.query(query, [reference]);
     return rows;
