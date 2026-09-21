@@ -54,7 +54,7 @@ class JournalNotificationModel {
         const params = [];
 
         if (categorie && categorie !== 'TOUTES') {
-            params.push(categorie.tuUpperCase());
+            params.push(categorie.toUpperCase());
             querry += `AND jn.categorie_action = $${params.length}`
         }
         if (nonLuSeulement === true || nonLuSeulement === 'true') {

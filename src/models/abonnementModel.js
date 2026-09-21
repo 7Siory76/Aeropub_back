@@ -1,5 +1,5 @@
 const db = require('../config/db');
-import JournalNotificationModel from './journalNotificationModel';
+const JournalNotificationModel = require('./journalNotificationModel');
 
 class AbonnementModel {
   static async resolveIdTypeStatut(statutOrId) {
@@ -83,25 +83,35 @@ class AbonnementModel {
 
     // 4. Mettre à jour l'historique Etat_Support pour chaque support
     for (const supRef of supportRefs) {
-      // Clôturer l'ancien état ouvert s'il y en a un
+      // Clôturer l'ancien état ouvert/actif s'il y en a un
       await db.query(`
         UPDATE Etat_Support 
         SET date_fin = CURRENT_TIMESTAMP 
-        WHERE reference_support = $1 AND date_fin IS NULL
+        WHERE reference_support = $1 AND (date_fin IS NULL OR date_fin > CURRENT_TIMESTAMP)
       `, [supRef]);
 
-      // Insérer le nouvel état :
-      // - date_debut = date debut de l'abonnement
-      // - date_fin = date echeance de l'abonnement
-      // - observation = date de saisie + détails du contrat
+      // Déterminer les dates exactes selon le type d'état :
+      let supDateDebut = abo.date_debut;
+      let supDateFin = abo.date_echeance;
+
+      if (targetEtatNom === 'disponible') {
+        // Libéré (contrat expiré, résilié ou archivé) : disponible à partir de maintenant, durée indéterminée
+        supDateDebut = new Date();
+        supDateFin = null;
+      } else {
+        // Réservé, Occupé, etc. : date_debut reste STRICTEMENT la date de début contractuelle de l'abonnement
+        supDateDebut = abo.date_debut;
+        supDateFin = abo.date_echeance;
+      }
+
       await db.query(`
         INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, date_fin, observation)
         VALUES ($1, $2, $3, $4, $5)
       `, [
         supRef,
         targetEtatId,
-        abo.date_debut,
-        abo.date_echeance,
+        supDateDebut,
+        supDateFin,
         `[Saisie le ${dateSaisieStr}] Contrat ${referenceAbonnement} : ${targetEtatNom} (Statut: ${nomStatut})`
       ]);
     }
@@ -204,13 +214,16 @@ class AbonnementModel {
         FROM Statut_Abonnement sa
         JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
         WHERE sa.id_abonnement = a.reference
-        ORDER BY sa.date_debut DESC, sa.id DESC
+        ORDER BY sa.id DESC
         LIMIT 1
       ) st ON true
       WHERE asup.reference_support = $1
         AND ($2::text IS NULL OR a.reference != $2)
         AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%archiv%'
         AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%r_sili%'
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%resili%'
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%annul%'
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%expir%'
         AND a.date_debut <= $4
         AND a.date_echeance >= $3
       LIMIT 1
@@ -265,6 +278,12 @@ class AbonnementModel {
     const finalDateDebut = date_debut || new Date();
     const finalDateEcheance = date_echeance || date_fin || new Date();
 
+    if (new Date(finalDateEcheance) < new Date(finalDateDebut)) {
+      const error = new Error("La date d'échéance doit être postérieure ou égale à la date de début.");
+      error.statusCode = 400;
+      throw error;
+    }
+
     const allSupports = [];
     if (reference_support) allSupports.push(reference_support);
     if (reference_emplacement && !allSupports.includes(reference_emplacement)) allSupports.push(reference_emplacement);
@@ -293,6 +312,22 @@ class AbonnementModel {
       }
     }
 
+    let finalPeriodicite = periodicite;
+    if (!finalPeriodicite || String(finalPeriodicite).trim() === '') {
+      const d1 = new Date(finalDateDebut);
+      const d2 = new Date(finalDateEcheance);
+      const diffMonths = Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24 * 30.4375));
+      if (diffMonths <= 1) {
+        finalPeriodicite = 'Mensuel';
+      } else if (diffMonths >= 2 && diffMonths <= 4) {
+        finalPeriodicite = 'Trimestriel';
+      } else if (diffMonths >= 5 && diffMonths <= 8) {
+        finalPeriodicite = 'Semestriel';
+      } else {
+        finalPeriodicite = 'Annuel';
+      }
+    }
+
     const insertAboQuery = `
       INSERT INTO Abonnement (
         reference, id_client, id_commercial, id_abonnement_precedent,
@@ -312,7 +347,7 @@ class AbonnementModel {
       annonceur_campagne || null,
       finalTarif,
       devise || 'MGA',
-      periodicite || 'Annuel',
+      finalPeriodicite,
       finalDateDebut,
       finalDateEcheance,
       reconduction_tacite === true || reconduction_tacite === 'true',
@@ -395,6 +430,12 @@ class AbonnementModel {
 
     const targetDateDebut = date_debut || currentAbo.date_debut;
     const targetDateFin = date_echeance || date_fin || currentAbo.date_echeance || currentAbo.date_fin;
+
+    if (new Date(targetDateFin) < new Date(targetDateDebut)) {
+      const error = new Error("La date d'échéance doit être postérieure ou égale à la date de début.");
+      error.statusCode = 400;
+      throw error;
+    }
 
     if (supports !== undefined && Array.isArray(supports)) {
       const currentStatut = String(currentAbo.statut_abonnement || currentAbo.statut || '').trim().toLowerCase();
@@ -534,16 +575,48 @@ class AbonnementModel {
       const resolvedIdStatut = await this.resolveIdTypeStatut(newStatut);
       const statutRes = await db.query('SELECT nom_statut FROM Type_Statut_Abonnement WHERE id = $1', [resolvedIdStatut]);
       const nomStatut = statutRes.rows[0]?.nom_statut || 'Actif';
+      const cleanNomStatut = String(nomStatut).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+      // Si on active ou réactive le contrat, vérifier qu'aucun support n'est déjà réservé par un autre contrat
+      const isActivating = !cleanNomStatut.includes('resili') && 
+                           !cleanNomStatut.includes('archiv') && 
+                           !cleanNomStatut.includes('annul') && 
+                           !cleanNomStatut.includes('expir');
+
+      if (isActivating) {
+        const currentSups = await db.query(
+          'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
+          [reference]
+        );
+        for (const row of currentSups.rows) {
+          const supRef = row.reference_support;
+          const conflict = await this.checkSupportConflict({
+            supportRef: supRef,
+            excludeAboRef: reference,
+            dateDebut: targetDateDebut,
+            dateFin: targetDateFin
+          });
+          if (conflict) {
+            const debStr = new Date(conflict.date_debut).toLocaleDateString('fr-FR');
+            const finStr = new Date(conflict.date_echeance).toLocaleDateString('fr-FR');
+            const error = new Error(
+              `Impossible de passer le contrat au statut "${nomStatut}" : le support "${supRef}" a déjà été réattribué au contrat ${conflict.reference} (${conflict.raison_sociale || 'Client'}) du ${debStr} au ${finStr}.`
+            );
+            error.statusCode = 409;
+            throw error;
+          }
+        }
+      }
 
       const now = new Date();
       const pad = (n) => String(n).padStart(2, '0');
       const dateSaisieStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
 
-      // Clôturer le statut précédent
+      // Clôturer le statut précédent en cours
       await db.query(`
         UPDATE Statut_Abonnement 
         SET date_fin = CURRENT_TIMESTAMP 
-        WHERE id_abonnement = $1 AND date_fin IS NULL
+        WHERE id_abonnement = $1 AND (date_fin IS NULL OR date_fin > CURRENT_TIMESTAMP)
       `, [reference]);
 
       await db.query(`
@@ -552,25 +625,64 @@ class AbonnementModel {
       `, [
         reference,
         resolvedIdStatut,
-        targetDateDebut,
-        targetDateFin,
+        targetDateDebut, // Reste STRICTEMENT la date de début contractuelle
+        targetDateFin,   // Reste STRICTEMENT la date d'échéance contractuelle
         `[Saisie le ${dateSaisieStr}] Changement de statut vers ${nomStatut}`
       ]);
 
       await this.cascadeStatutToSupports(reference, resolvedIdStatut);
     } else if (date_debut || date_echeance || date_fin || (supports !== undefined && Array.isArray(supports))) {
+      // Si les dates changent sans changement de statut, synchroniser les dates du dernier statut actif
+      if (date_debut || date_echeance || date_fin) {
+        await db.query(`
+          UPDATE Statut_Abonnement
+          SET date_debut = COALESCE($1, date_debut),
+              date_fin = COALESCE($2, date_fin)
+          WHERE id = (
+            SELECT id FROM Statut_Abonnement 
+            WHERE id_abonnement = $3 
+            ORDER BY id DESC LIMIT 1
+          )
+        `, [targetDateDebut, targetDateFin, reference]);
+      }
       await this.cascadeStatutToSupports(reference);
     }
+
+    // Journalisation de la mise à jour
+    await JournalNotificationModel.logAction({
+      id_utilisateur: id_commercial ? parseInt(id_commercial, 10) : null,
+      categorie_action: newStatut ? 'STATUT' : 'MODIFICATION',
+      entite_concernee: 'ABONNEMENT',
+      reference_entite: reference,
+      valeur_apres: {
+        date_debut: targetDateDebut,
+        date_echeance: targetDateFin,
+        statut: newStatut || currentAbo.statut_abonnement
+      },
+      message_notification: newStatut
+        ? `Contrat ${reference} : passage au statut "${newStatut}".`
+        : `Mise à jour des informations du contrat ${reference}.`
+    });
 
     return this.getById(reference);
   }
 
   static async delete(reference) {
+    const current = await this.getById(reference);
     await db.query('DELETE FROM Statut_Abonnement WHERE id_abonnement = $1', [reference]);
     await db.query('DELETE FROM Abonnement_Support WHERE id_abonnement = $1', [reference]);
     await db.query('DELETE FROM Action_Commerciale WHERE id_abonnement = $1', [reference]);
     await db.query('DELETE FROM Document_Lie WHERE id_abonnement = $1', [reference]);
     const { rows } = await db.query('DELETE FROM Abonnement WHERE reference = $1 RETURNING *', [reference]);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'SUPPRESSION',
+      entite_concernee: 'ABONNEMENT',
+      reference_entite: reference,
+      valeur_apres: current,
+      message_notification: `Suppression du contrat ${reference}.`
+    });
+
     return rows[0];
   }
 

@@ -20,8 +20,9 @@ const documentRoutes = require('./src/routes/documentRoutes');
 const parametrageRoutes = require('./src/routes/parametrageRoutes');
 const typeEtatSupportRoutes = require('./src/routes/typeEtatSupportRoutes');
 const typeStatutAbonnementRoutes = require('./src/routes/typeStatutAbonnementRoutes');
-const ZoneController = require('./src/controllers/zoneController');
 const journalRoutes = require('./src/routes/journalNotificationRoutes');
+const ZoneController = require('./src/controllers/zoneController');
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;

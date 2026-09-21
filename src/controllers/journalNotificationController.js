@@ -10,7 +10,7 @@ class JournalNotificationController {
                 limit
             });
             const unreadCount = await JournalNotificationModel.getUnreadCount();
-            return res.Status(200).json({ status: 'success', unreadCount, count: data.length, data });
+            return res.status(200).json({ status: 'success', unreadCount, count: data.length, data });
         } catch (err) {
             return res.status(500).json({ status: 'error', message: err.message })
         }

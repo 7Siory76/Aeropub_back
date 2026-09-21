@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const JournalNotificationModel = require('./journalNotificationModel');
 
 class SupportModel {
   static async resolveIdTypeEtat(etatOrId) {
@@ -136,7 +137,27 @@ class SupportModel {
     return rows[0];
   }
 
-  static async create({ reference, id_zone, id_categorie, id_type, id_type_support, id_type_etat, caracteristiques, statut, etat, observation, id_utilisateur }) {
+  static async create({ 
+    reference, 
+    id_zone, 
+    id_categorie, 
+    id_type, 
+    id_type_support, 
+    id_type_etat, 
+    caracteristiques, 
+    statut, 
+    etat, 
+    observation, 
+    id_utilisateur,
+    date_debut,
+    date_fin
+  }) {
+    if (date_debut && date_fin && new Date(date_fin) < new Date(date_debut)) {
+      const error = new Error("La date de fin doit être postérieure ou égale à la date de début.");
+      error.statusCode = 400;
+      throw error;
+    }
+
     const finalType = id_type || id_type_support || 1;
     const finalZone = id_zone || 1;
     const finalCat = id_categorie || 1;
@@ -162,80 +183,177 @@ class SupportModel {
     const obsText = observation ? `[Saisie le ${dateSaisieStr}] ${observation}` : `[Saisie le ${dateSaisieStr}] Création du support`;
 
     const resolvedIdEtat = await this.resolveIdTypeEtat(id_type_etat || etat || statut || 'disponible');
+    const finalDateDebut = date_debut ? new Date(date_debut) : now;
+    const finalDateFin = date_fin ? new Date(date_fin) : null;
+
     await db.query(`
-      INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, id_utilisateur, observation)
-      VALUES ($1, $2, NOW(), $3, $4)
-    `, [reference, resolvedIdEtat, id_utilisateur || null, obsText]);
+      INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, date_fin, id_utilisateur, observation)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [reference, resolvedIdEtat, finalDateDebut, finalDateFin, id_utilisateur || null, obsText]);
+
+    // Journalisation
+    await JournalNotificationModel.logAction({
+      id_utilisateur: id_utilisateur ? parseInt(id_utilisateur, 10) : null,
+      categorie_action: 'CREATION',
+      entite_concernee: 'SUPPORT',
+      reference_entite: reference,
+      valeur_apres: { reference, finalType, finalZone, finalCat },
+      message_notification: `Création du support ${reference}.`
+    });
 
     return this.getByReference(reference);
   }
 
-  static async update(reference, { id_zone, id_categorie, id_type, id_type_support, id_type_etat, caracteristiques, statut, etat, observation, id_utilisateur }) {
+  static async update(reference, { 
+    id_zone, 
+    id_categorie, 
+    id_type, 
+    id_type_support, 
+    id_type_etat, 
+    caracteristiques, 
+    statut, 
+    etat, 
+    observation, 
+    id_utilisateur,
+    date_debut,
+    date_fin
+  }) {
+    if (date_debut && date_fin && new Date(date_fin) < new Date(date_debut)) {
+      const error = new Error("La date de fin de l'état doit être postérieure ou égale à la date de début.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const current = await this.getByReference(reference);
+    if (!current) {
+      const error = new Error(`Support avec la référence "${reference}" introuvable.`);
+      error.statusCode = 404;
+      throw error;
+    }
+
     // 1. Mettre à jour les champs techniques du support si fournis
     if (id_zone || id_categorie || id_type || id_type_support || caracteristiques !== undefined) {
-      const current = await this.getByReference(reference);
-      if (current) {
-        await db.query(`
-          UPDATE Support
-          SET id_zone = COALESCE($1, id_zone),
-              id_categorie = COALESCE($2, id_categorie),
-              id_type = COALESCE($3, id_type),
-              caracteristiques = COALESCE($4, caracteristiques)
-          WHERE reference = $5
-        `, [
-          id_zone ? parseInt(id_zone, 10) : null,
-          id_categorie ? parseInt(id_categorie, 10) : null,
-          (id_type || id_type_support) ? parseInt(id_type || id_type_support, 10) : null,
-          caracteristiques !== undefined ? caracteristiques : null,
-          reference
-        ]);
-      }
+      await db.query(`
+        UPDATE Support
+        SET id_zone = COALESCE($1, id_zone),
+            id_categorie = COALESCE($2, id_categorie),
+            id_type = COALESCE($3, id_type),
+            caracteristiques = COALESCE($4, caracteristiques)
+        WHERE reference = $5
+      `, [
+        id_zone ? parseInt(id_zone, 10) : null,
+        id_categorie ? parseInt(id_categorie, 10) : null,
+        (id_type || id_type_support) ? parseInt(id_type || id_type_support, 10) : null,
+        caracteristiques !== undefined ? caracteristiques : null,
+        reference
+      ]);
     }
 
-    // 2. Mettre à jour l'historique d'état si un nouvel état ou une observation nouvelle est fournie
+    // 2. Mettre à jour l'historique d'état si un nouvel état, de nouvelles dates ou une observation nouvelle est fournie
     const newState = id_type_etat || etat || statut;
-    if (newState || observation !== undefined) {
-      const current = await this.getByReference(reference);
-      const resolvedIdEtat = await this.resolveIdTypeEtat(newState || current?.id_type_etat || 'disponible');
+    const resolvedIdEtat = await this.resolveIdTypeEtat(newState || current.id_type_etat || 'disponible');
 
-      const cleanObs = (observation || '').replace(/^\[Saisie le [^\]]+\]\s*/, '').trim();
-      const currentCleanObs = (current?.observation || '').replace(/^\[Saisie le [^\]]+\]\s*/, '').trim();
-      const isEtatChanged = !current || current.id_type_etat !== resolvedIdEtat;
-      const isObsChanged = observation !== undefined && cleanObs !== currentCleanObs && cleanObs !== '';
+    const cleanObs = (observation || '').replace(/^\[Saisie le [^\]]+\]\s*/, '').trim();
+    const currentCleanObs = (current.observation || '').replace(/^\[Saisie le [^\]]+\]\s*/, '').trim();
+    const isEtatChanged = Boolean(newState && current.id_type_etat !== resolvedIdEtat);
+    const isObsChanged = observation !== undefined && cleanObs !== currentCleanObs && cleanObs !== '';
+    const isDatesChanged = Boolean((date_debut && date_debut !== current.date_debut_etat) || (date_fin && date_fin !== current.date_fin_etat));
 
-      if (isEtatChanged || isObsChanged) {
-        const now = new Date();
-        const pad = (n) => String(n).padStart(2, '0');
-        const dateSaisieStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-        const obsText = cleanObs ? `[Saisie le ${dateSaisieStr}] ${cleanObs}` : `[Saisie le ${dateSaisieStr}] Mise à jour de l'état`;
+    if (isEtatChanged || isObsChanged || isDatesChanged) {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const dateSaisieStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      const obsText = cleanObs ? `[Saisie le ${dateSaisieStr}] ${cleanObs}` : `[Saisie le ${dateSaisieStr}] Mise à jour de l'état`;
 
-        // Clôturer l'état précédent actif
-        await db.query(`
-          UPDATE Etat_Support
-          SET date_fin = NOW()
-          WHERE reference_support = $1 AND date_fin IS NULL
-        `, [reference]);
+      // Déterminer les dates début et fin cibles:
+      // Si le support est lié à un abonnement futur ou en cours, conserver la date contractuelle
+      const aboRes = await db.query(`
+        SELECT a.reference, a.date_debut, a.date_echeance 
+        FROM Abonnement_Support asup 
+        JOIN Abonnement a ON asup.id_abonnement = a.reference 
+        WHERE asup.reference_support = $1 
+          AND (a.date_echeance IS NULL OR a.date_echeance >= CURRENT_TIMESTAMP)
+        ORDER BY a.date_debut DESC LIMIT 1
+      `, [reference]);
+      const activeAbo = aboRes.rows[0];
 
-        // Insérer le nouvel état
-        await db.query(`
-          INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, id_utilisateur, observation)
-          VALUES ($1, $2, NOW(), $3, $4)
-        `, [
-          reference,
-          resolvedIdEtat,
-          id_utilisateur || null,
-          obsText
-        ]);
+      let targetDateDebut;
+      let targetDateFin;
+
+      if (date_debut) {
+        targetDateDebut = new Date(date_debut);
+      } else if (activeAbo && newState && !String(newState).toLowerCase().includes('dispo')) {
+        // Garder la date de début contractuelle de l'abonnement même si le contrat est dans le futur
+        targetDateDebut = activeAbo.date_debut;
+      } else if (current.date_debut_etat && new Date(current.date_debut_etat) > now && (!newState || !String(newState).toLowerCase().includes('dispo'))) {
+        targetDateDebut = current.date_debut_etat;
+      } else {
+        targetDateDebut = now;
       }
+
+      if (date_fin !== undefined) {
+        targetDateFin = date_fin ? new Date(date_fin) : null;
+      } else if (activeAbo && (!newState || !String(newState).toLowerCase().includes('dispo'))) {
+        targetDateFin = activeAbo.date_echeance;
+      } else if (current.date_fin_etat && (!newState || !String(newState).toLowerCase().includes('dispo'))) {
+        targetDateFin = current.date_fin_etat;
+      } else {
+        targetDateFin = null;
+      }
+
+      // Clôturer l'état précédent actif ou programmé
+      await db.query(`
+        UPDATE Etat_Support
+        SET date_fin = CURRENT_TIMESTAMP
+        WHERE reference_support = $1 AND (date_fin IS NULL OR date_fin > CURRENT_TIMESTAMP)
+      `, [reference]);
+
+      // Insérer le nouvel état
+      await db.query(`
+        INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, date_fin, id_utilisateur, observation)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        reference,
+        resolvedIdEtat,
+        targetDateDebut,
+        targetDateFin,
+        id_utilisateur || null,
+        obsText
+      ]);
     }
+
+    // Journalisation de la mise à jour
+    await JournalNotificationModel.logAction({
+      id_utilisateur: id_utilisateur ? parseInt(id_utilisateur, 10) : null,
+      categorie_action: isEtatChanged ? 'ETAT' : 'MODIFICATION',
+      entite_concernee: 'SUPPORT',
+      reference_entite: reference,
+      valeur_apres: {
+        reference,
+        etat: newState || current.etat
+      },
+      message_notification: isEtatChanged
+        ? `Support ${reference} : passage à l'état "${newState}".`
+        : `Mise à jour des informations du support ${reference}.`
+    });
 
     return this.getByReference(reference);
   }
 
   static async delete(reference) {
+    const current = await this.getByReference(reference);
     await db.query('DELETE FROM Etat_Support WHERE reference_support = $1', [reference]);
     await db.query('DELETE FROM Abonnement_Support WHERE reference_support = $1', [reference]);
     const { rows } = await db.query('DELETE FROM Support WHERE reference = $1 RETURNING *', [reference]);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'SUPPRESSION',
+      entite_concernee: 'SUPPORT',
+      reference_entite: reference,
+      valeur_apres: current,
+      message_notification: `Suppression du support ${reference}.`
+    });
+
     return rows[0];
   }
 
