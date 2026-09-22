@@ -323,18 +323,31 @@ class SupportModel {
     }
 
     // Journalisation de la mise à jour
+    const isZoneChanged = Boolean(id_zone && current.id_zone !== parseInt(id_zone, 10));
+    let catAction = 'MODIFICATION';
+    let msgNotification = `Mise à jour des informations du support ${reference}.`;
+
+    if (isEtatChanged) {
+      catAction = 'ETAT';
+      msgNotification = `Support ${reference} : passage à l'état "${newState}".`;
+    } else if (isZoneChanged) {
+      catAction = 'DEPLACEMENT';
+      const zoneRes = await db.query('SELECT nom_zone FROM Zone_Terminal WHERE id = $1', [parseInt(id_zone, 10)]);
+      const targetZoneNom = zoneRes.rows[0]?.nom_zone || `Zone #${id_zone}`;
+      msgNotification = `Support ${reference} : déplacé vers la zone "${targetZoneNom}".`;
+    }
+
     await JournalNotificationModel.logAction({
       id_utilisateur: id_utilisateur ? parseInt(id_utilisateur, 10) : null,
-      categorie_action: isEtatChanged ? 'ETAT' : 'MODIFICATION',
+      categorie_action: catAction,
       entite_concernee: 'SUPPORT',
       reference_entite: reference,
       valeur_apres: {
         reference,
-        etat: newState || current.etat
+        etat: newState || current.etat,
+        id_zone: id_zone ? parseInt(id_zone, 10) : current.id_zone
       },
-      message_notification: isEtatChanged
-        ? `Support ${reference} : passage à l'état "${newState}".`
-        : `Mise à jour des informations du support ${reference}.`
+      message_notification: msgNotification
     });
 
     return this.getByReference(reference);

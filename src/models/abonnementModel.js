@@ -24,10 +24,10 @@ class AbonnementModel {
     }
   }
 
-  static async cascadeStatutToSupports(referenceAbonnement, statutOrId) {
+  static async cascadeStatutToSupports(referenceAbonnement, statutOrId, idUtilisateur = null) {
     // 1. Récupérer les informations complètes du contrat d'abonnement
     const aboRes = await db.query(
-      'SELECT reference, date_debut, date_echeance, date_creation FROM Abonnement WHERE reference = $1',
+      'SELECT reference, date_debut, date_echeance, date_creation, id_commercial FROM Abonnement WHERE reference = $1',
       [referenceAbonnement]
     );
     const abo = aboRes.rows[0];
@@ -114,6 +114,22 @@ class AbonnementModel {
         supDateFin,
         `[Saisie le ${dateSaisieStr}] Contrat ${referenceAbonnement} : ${targetEtatNom} (Statut: ${nomStatut})`
       ]);
+
+      // Journalisation du changement d'état du support
+      await JournalNotificationModel.logAction({
+        id_utilisateur: idUtilisateur || abo.id_commercial || null,
+        categorie_action: 'STATUT',
+        entite_concernee: 'SUPPORT',
+        reference_entite: supRef,
+        valeur_apres: {
+          support: supRef,
+          nouvel_etat: targetEtatNom,
+          id_type_etat: targetEtatId,
+          reference_abonnement: referenceAbonnement,
+          statut_contrat: nomStatut
+        },
+        message_notification: `Le support ${supRef} est passé à l'état "${targetEtatNom}" suite au passage du contrat ${referenceAbonnement} au statut "${nomStatut}".`
+      });
     }
   }
 
@@ -383,7 +399,7 @@ class AbonnementModel {
       `[Saisie le ${dateSaisieStr}] Création du contrat (${nomStatut})`
     ]);
 
-    await this.cascadeStatutToSupports(finalRef, resolvedIdStatut);
+    await this.cascadeStatutToSupports(finalRef, resolvedIdStatut, finalCommercial);
     await JournalNotificationModel.logAction({
       id_utilisateur: finalCommercial,
       categorie_action: 'CREATION',
@@ -509,6 +525,18 @@ class AbonnementModel {
           VALUES ($1, $2)
           ON CONFLICT DO NOTHING
         `, [reference, supRef]);
+
+        await JournalNotificationModel.logAction({
+          id_utilisateur: id_commercial ? parseInt(id_commercial, 10) : null,
+          categorie_action: 'ASSOCIATION',
+          entite_concernee: 'SUPPORT',
+          reference_entite: supRef,
+          valeur_apres: {
+            support: supRef,
+            id_abonnement: reference
+          },
+          message_notification: `Support "${supRef}" associé au contrat ${reference}.`
+        });
       } else if (date_debut || date_echeance || date_fin) {
         const currentSupportsRows = await db.query(
           'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
@@ -630,8 +658,8 @@ class AbonnementModel {
         `[Saisie le ${dateSaisieStr}] Changement de statut vers ${nomStatut}`
       ]);
 
-      await this.cascadeStatutToSupports(reference, resolvedIdStatut);
-    } else if (date_debut || date_echeance || date_fin || (supports !== undefined && Array.isArray(supports))) {
+      await this.cascadeStatutToSupports(reference, resolvedIdStatut, id_commercial);
+    } else if (date_debut || date_echeance || date_fin || (supports !== undefined && Array.isArray(supports)) || reference_support || reference_emplacement) {
       // Si les dates changent sans changement de statut, synchroniser les dates du dernier statut actif
       if (date_debut || date_echeance || date_fin) {
         await db.query(`
@@ -645,7 +673,7 @@ class AbonnementModel {
           )
         `, [targetDateDebut, targetDateFin, reference]);
       }
-      await this.cascadeStatutToSupports(reference);
+      await this.cascadeStatutToSupports(reference, null, id_commercial);
     }
 
     // Journalisation de la mise à jour
@@ -669,6 +697,39 @@ class AbonnementModel {
 
   static async delete(reference) {
     const current = await this.getById(reference);
+
+    // Récupérer et libérer tous les supports liés
+    const supportsRows = await db.query(
+      'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
+      [reference]
+    );
+    const supportRefs = supportsRows.rows.map(r => r.reference_support);
+
+    for (const supRef of supportRefs) {
+      await db.query(`
+        UPDATE Etat_Support 
+        SET date_fin = CURRENT_TIMESTAMP 
+        WHERE reference_support = $1 AND (date_fin IS NULL OR date_fin > CURRENT_TIMESTAMP)
+      `, [supRef]);
+
+      await db.query(`
+        INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, date_fin, observation)
+        VALUES ($1, 1, CURRENT_TIMESTAMP, NULL, $2)
+      `, [supRef, `Contrat ${reference} supprimé : support libéré (disponible)`]);
+
+      await JournalNotificationModel.logAction({
+        categorie_action: 'STATUT',
+        entite_concernee: 'SUPPORT',
+        reference_entite: supRef,
+        valeur_apres: {
+          support: supRef,
+          nouvel_etat: 'disponible',
+          reference_abonnement: reference
+        },
+        message_notification: `Support "${supRef}" libéré (disponible) suite à la suppression du contrat ${reference}.`
+      });
+    }
+
     await db.query('DELETE FROM Statut_Abonnement WHERE id_abonnement = $1', [reference]);
     await db.query('DELETE FROM Abonnement_Support WHERE id_abonnement = $1', [reference]);
     await db.query('DELETE FROM Action_Commerciale WHERE id_abonnement = $1', [reference]);

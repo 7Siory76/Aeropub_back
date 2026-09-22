@@ -1,4 +1,7 @@
 const UtilisateurService = require('../services/utilisateurService');
+const UtilisateurModel = require('../models/utilisateurModel')
+const bcrypt = require('bcryptjs');
+
 
 class UtilisateurController {
   static async getAll(req, res) {
@@ -54,6 +57,47 @@ class UtilisateurController {
       return res.status(500).json({ status: 'error', message: error.message });
     }
   }
+
+  static async login(req, res) {
+    try {
+      const { email, mot_de_passe } = req.body;
+      if (!email || !mot_de_passe) {
+        return res.status(400).json({ message: "Email et mot de passe requis." });
+      }
+
+      const user = await UtilisateurModel.findByEmail(email);
+      if (!user) {
+        return res.status(401).json({ message: "Identifiants invalides." })
+      }
+
+      if (!user.actif) {
+        return res.status(403).json({ message: "Ce compte utilisateur est désactivé." });
+      }
+
+      const isBcrypt = user.mot_de_passe_hash && user.mot_de_passe_hash.startsWith('$2');
+      const match = isBcrypt
+        ? await bcrypt.compare(mot_de_passe, user.mot_de_passe_hash)
+        : (mot_de_passe === user.mot_de_passe_hash);
+      if (!match) {
+        return res.status(401).json({ message: "Mot de passe incorrect." });
+      }
+
+      delete user.mot_de_passe_hash;
+
+      return res.json({
+        message: "connexion réussie",
+        user: {
+          id: user.id,
+          nom: user.nom,
+          email: user.email,
+          role: user.role
+        }
+      });
+    } catch (err) {
+      return res.status(500).json({ message: err.message });
+    }
+  }
+
 }
 
 module.exports = UtilisateurController;

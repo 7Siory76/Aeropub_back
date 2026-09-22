@@ -115,6 +115,12 @@ class ClientModel {
   }
 
   static async delete(id) {
+    const aboCheck = await db.query('SELECT reference FROM Abonnement WHERE id_client = $1 LIMIT 1', [id]);
+    if (aboCheck.rows.length > 0) {
+      const error = new Error("Impossible de supprimer ce client car il possède un ou plusieurs contrats d'abonnement. Veuillez supprimer ou transférer ses contrats au préalable.");
+      error.statusCode = 400;
+      throw error;
+    }
     await db.query('DELETE FROM Contact WHERE id_client = $1', [id]);
     await db.query('DELETE FROM Action_Commerciale WHERE id_client = $1', [id]);
     await db.query('DELETE FROM Document_Lie WHERE id_client = $1', [id]);
