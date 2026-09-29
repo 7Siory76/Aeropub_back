@@ -22,7 +22,7 @@ const typeEtatSupportRoutes = require('./src/routes/typeEtatSupportRoutes');
 const typeStatutAbonnementRoutes = require('./src/routes/typeStatutAbonnementRoutes');
 const journalRoutes = require('./src/routes/journalNotificationRoutes');
 const ZoneController = require('./src/controllers/zoneController');
-
+const { initAbonnementCron } = require('./src/services/cronService');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -91,6 +91,7 @@ const startServer = async () => {
       console.log(`🚀 Serveur API Backend démarré sur : http://localhost:${PORT}`);
       console.log(`📡 Route Healthcheck : http://localhost:${PORT}/api/health`);
       console.log(`====================================================`);
+      initAbonnementCron(); // les requete automaitique
     });
   } catch (error) {
     console.error('❌ Erreur critique lors du démarrage du serveur:', error);
