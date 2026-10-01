@@ -21,6 +21,7 @@ const parametrageRoutes = require('./src/routes/parametrageRoutes');
 const typeEtatSupportRoutes = require('./src/routes/typeEtatSupportRoutes');
 const typeStatutAbonnementRoutes = require('./src/routes/typeStatutAbonnementRoutes');
 const journalRoutes = require('./src/routes/journalNotificationRoutes');
+const modeleCourrielRoutes = require('./src/routes/modeleCourrielRoutes');
 const ZoneController = require('./src/controllers/zoneController');
 const { initAbonnementCron } = require('./src/services/cronService');
 
@@ -54,6 +55,7 @@ app.use('/api/parametrages', parametrageRoutes);
 app.use('/api/types-etats-supports', typeEtatSupportRoutes);
 app.use('/api/types-statuts-abonnements', typeStatutAbonnementRoutes);
 app.use('/api/notifications', journalRoutes);
+app.use('/api/modeles-courriels', modeleCourrielRoutes);
 
 // Route de santé (Health check)
 app.get('/api/health', (req, res) => {

@@ -19,6 +19,18 @@ class ActionCommercialeController {
     }
   }
 
+  static async envoyerRelanceManuelle(req, res) {
+    try {
+      const { reference, id_abonnement } = req.body;
+      const ref = reference || id_abonnement;
+      const id_utilisateur = req.body.id_utilisateur || (req.user && req.user.id) || 1;
+      const data = await ActionCommercialeService.envoyerRelanceManuelle(ref, id_utilisateur);
+      return res.status(200).json({ status: 'success', message: data.message, data });
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ status: 'error', message: error.message });
+    }
+  }
+
   static async create(req, res) {
     try {
       const data = await ActionCommercialeService.create(req.body);
@@ -45,6 +57,8 @@ class ActionCommercialeController {
       return res.status(error.statusCode || 500).json({ status: 'error', message: error.message });
     }
   }
+
+
 }
 
 module.exports = ActionCommercialeController;

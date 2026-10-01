@@ -328,10 +328,9 @@ async function envoieMailAutomatique() {
         ? `${abo.nom_commercial}${abo.email_commercial ? ` (${abo.email_commercial})` : ''}`
         : senderMail;
 
-      // 5. Modèle du courriel selon le Cahier des Charges (CDC Art. 7.4 & 7.5)
-      //    Mentionne le nombre exact de jours restants (ex: 25 jours en cas de panne serveur à J-30)
-      const objetMail = `Échéance prochaine de votre contrat publicitaire AEROPUB - ${abo.reference}`;
-      const corpsMail = `Bonjour ${destNom},
+      // 5. Modèle du courriel depuis la table Modele_Courriel (avec repli par défaut CDC Art. 7.4 & 7.5)
+      let objetMail = `Échéance prochaine de votre contrat publicitaire AEROPUB - ${abo.reference}`;
+      let corpsMail = `Bonjour ${destNom},
 
 Nous vous informons que votre contrat n° ${abo.reference}, relatif au(x) support(s) ${supportsStr}, arrivera à échéance dans ${diffJours} jour(s), le ${dateFr}.
 
@@ -339,6 +338,29 @@ Votre interlocuteur AEROPUB (${interlocuteurStr}) prendra contact avec vous afin
 
 Bien cordialement,
 L'équipe commerciale AEROPUB`;
+
+      try {
+        const resModele = await db.query(
+          "SELECT sujet, corps FROM Modele_Courriel WHERE code = 'RELANCE_ECHEANCE' LIMIT 1"
+        );
+        if (resModele.rows.length > 0 && resModele.rows[0].corps) {
+          const rawSujet = resModele.rows[0].sujet || objetMail;
+          const rawCorps = resModele.rows[0].corps;
+
+          const replaceVars = (text) => text
+            .replace(/\{destNom\}/g, destNom)
+            .replace(/\{reference\}/g, abo.reference)
+            .replace(/\{supports\}/g, supportsStr)
+            .replace(/\{diffJours\}/g, `${diffJours}`)
+            .replace(/\{dateFr\}/g, dateFr)
+            .replace(/\{interlocuteur\}/g, interlocuteurStr);
+
+          objetMail = replaceVars(rawSujet);
+          corpsMail = replaceVars(rawCorps);
+        }
+      } catch (mErr) {
+        console.warn('[CRON - MAIL] Erreur chargement Modele_Courriel :', mErr.message);
+      }
 
       console.log(`[CRON - MAIL] Envoi courriel de prévention pour le contrat ${abo.reference} à ${destNom} <${destEmail}> (reste ${diffJours} jour(s)).`);
 
