@@ -280,12 +280,27 @@ class AbonnementModel {
     reference_emplacement,
     supports = []
   }) {
-    let finalRef = reference;
+    let finalRef = reference && String(reference).trim().length > 0 ? String(reference).trim() : null;
     if (!finalRef) {
       const year = new Date().getFullYear();
       const countRes = await db.query('SELECT COUNT(*) AS total FROM Abonnement');
-      const seq = String(parseInt(countRes.rows[0].total, 10) + 1).padStart(3, '0');
-      finalRef = `ABO-${year}-${seq}`;
+      let seqNum = parseInt(countRes.rows[0].total, 10) + 1;
+      while (true) {
+        const candidateRef = `ABO-${year}-${String(seqNum).padStart(3, '0')}`;
+        const check = await db.query('SELECT 1 FROM Abonnement WHERE reference = $1', [candidateRef]);
+        if (check.rows.length === 0) {
+          finalRef = candidateRef;
+          break;
+        }
+        seqNum++;
+      }
+    } else {
+      const checkExisting = await db.query('SELECT reference FROM Abonnement WHERE reference = $1', [finalRef]);
+      if (checkExisting.rows.length > 0) {
+        const error = new Error(`La référence de contrat "${finalRef}" existe déjà. Veuillez utiliser une autre référence.`);
+        error.statusCode = 409;
+        throw error;
+      }
     }
 
     const finalClient = parseInt(id_client, 10);

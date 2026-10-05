@@ -1,4 +1,5 @@
 const ArticleService = require('../services/articleService');
+const { sendError } = require('../utils/errorHandler');
 
 /**
  * CONTROLLER : Gestion des requêtes HTTP pour les CRUD des articles
@@ -13,11 +14,7 @@ class ArticleController {
         data: articles
       });
     } catch (error) {
-      console.error('❌ Erreur ArticleController.getAllArticles:', error);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Impossible de récupérer la liste des articles.'
-      });
+      return sendError(res, error);
     }
   }
 
@@ -30,11 +27,7 @@ class ArticleController {
         data: article
       });
     } catch (error) {
-      const statusCode = error.statusCode || 500;
-      return res.status(statusCode).json({
-        status: 'error',
-        message: error.message
-      });
+      return sendError(res, error);
     }
   }
 
@@ -47,11 +40,7 @@ class ArticleController {
         data: newArticle
       });
     } catch (error) {
-      const statusCode = error.statusCode || 500;
-      return res.status(statusCode).json({
-        status: 'error',
-        message: error.message
-      });
+      return sendError(res, error);
     }
   }
 
@@ -65,11 +54,7 @@ class ArticleController {
         data: deletedArticle
       });
     } catch (error) {
-      const statusCode = error.statusCode || 500;
-      return res.status(statusCode).json({
-        status: 'error',
-        message: error.message
-      });
+      return sendError(res, error);
     }
   }
 }

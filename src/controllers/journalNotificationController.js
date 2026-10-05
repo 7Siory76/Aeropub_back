@@ -1,4 +1,5 @@
 const JournalNotificationModel = require('../models/journalNotificationModel');
+const { sendError } = require('../utils/errorHandler');
 
 class JournalNotificationController {
     static async getNotifications(req, res) {
@@ -12,31 +13,34 @@ class JournalNotificationController {
             const unreadCount = await JournalNotificationModel.getUnreadCount();
             return res.status(200).json({ status: 'success', unreadCount, count: data.length, data });
         } catch (err) {
-            return res.status(500).json({ status: 'error', message: err.message })
+            return sendError(res, err);
         }
     }
+
     static async getUnreadCount(req, res) {
         try {
             const count = await JournalNotificationModel.getUnreadCount();
             return res.status(200).json({ status: 'success', unreadCount: count });
         } catch (err) {
-            return res.status(500).json({ status: 'error', message: err.message });
+            return sendError(res, err);
         }
     }
+
     static async markAsRead(req, res) {
         try {
             const updated = await JournalNotificationModel.markAsRead(req.params.id);
             return res.status(200).json({ status: 'success', data: updated });
         } catch (err) {
-            return res.status(500).json({ status: 'error', message: err.message });
+            return sendError(res, err);
         }
     }
+
     static async markAllAsRead(req, res) {
         try {
             await JournalNotificationModel.markAllAsRead();
             return res.status(200).json({ status: 'success', message: 'Toutes les notifications sont marquées comme lues' });
         } catch (err) {
-            return res.status(500).json({ status: 'error', message: err.message });
+            return sendError(res, err);
         }
     }
 }

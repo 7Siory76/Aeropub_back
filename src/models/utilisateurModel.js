@@ -25,6 +25,15 @@ class UtilisateurModel {
   }
 
   static async create({ nom, email, mot_de_passe, mot_de_passe_hash, id_role, actif }) {
+    if (email) {
+      const checkExisting = await db.query('SELECT 1 FROM Utilisateur WHERE LOWER(email) = LOWER($1)', [email.trim()]);
+      if (checkExisting.rows.length > 0) {
+        const error = new Error(`Cette adresse email (${email.trim()}) est déjà utilisée par un autre utilisateur.`);
+        error.statusCode = 409;
+        throw error;
+      }
+    }
+
     let finalHash = mot_de_passe_hash || mot_de_passe || 'secret123';
     if (finalHash && !finalHash.startsWith('$2')) {
       finalHash = await bcrypt.hash(finalHash, 10);

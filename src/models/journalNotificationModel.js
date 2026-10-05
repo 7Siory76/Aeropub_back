@@ -41,7 +41,7 @@ class JournalNotificationModel {
             return null;
         }
     }
-    static async getAll({ categorie = null, nonLuSeulement = false, limit = 50 } = {}) {
+    static async getAll({ categorie = null, nonLuSeulement = false, limit = 500 } = {}) {
         let querry = `
         SELECT jn.*,
         u.nom AS nom_utilisateur,
@@ -55,13 +55,13 @@ class JournalNotificationModel {
 
         if (categorie && categorie !== 'TOUTES') {
             params.push(categorie.toUpperCase());
-            querry += `AND jn.categorie_action = $${params.length}`
+            querry += ` AND jn.categorie_action = $${params.length}`;
         }
         if (nonLuSeulement === true || nonLuSeulement === 'true') {
             querry += ` AND jn.lu_par_admin = FALSE`;
         }
         querry += ` ORDER BY jn.date_action DESC LIMIT $${params.length + 1};`;
-        params.push(parseInt(limit, 10) || 50);
+        params.push(parseInt(limit, 10) || 500);
 
         const { rows } = await db.query(querry, params);
         return rows;

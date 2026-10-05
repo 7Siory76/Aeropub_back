@@ -158,6 +158,15 @@ class SupportModel {
       throw error;
     }
 
+    if (reference) {
+      const checkExisting = await db.query('SELECT reference FROM Support WHERE reference = $1', [reference.trim()]);
+      if (checkExisting.rows.length > 0) {
+        const error = new Error(`La référence de support "${reference.trim()}" existe déjà.`);
+        error.statusCode = 409;
+        throw error;
+      }
+    }
+
     const finalType = id_type || id_type_support || 1;
     const finalZone = id_zone || 1;
     const finalCat = id_categorie || 1;

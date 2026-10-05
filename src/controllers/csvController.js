@@ -1,4 +1,5 @@
 const CsvService = require('../services/csvService');
+const { sendError } = require('../utils/errorHandler');
 
 class CsvController {
   static async uploadCsv(req, res) {
@@ -19,12 +20,7 @@ class CsvController {
       });
 
     } catch (error) {
-      console.error('❌ Erreur Import CSV :', error);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Erreur lors du traitement du fichier CSV.',
-        details: error.message
-      });
+      return sendError(res, error);
     }
   }
 }
