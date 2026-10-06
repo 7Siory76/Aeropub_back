@@ -49,64 +49,150 @@ class ClientModel {
     return rows[0];
   }
 
-  static async create({ id, raison_sociale, nom_client, adresse_postale, adresse_facturation, etat_client, contact, nom_contact }) {
+  static async hasCommercialColumn() {
+    if (this._hasCommercialCol !== undefined) return this._hasCommercialCol;
+    try {
+      const res = await db.query(`
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'client' AND column_name = 'id_commercial'
+      `);
+      this._hasCommercialCol = res.rows.length > 0;
+    } catch {
+      this._hasCommercialCol = false;
+    }
+    return this._hasCommercialCol;
+  }
+
+  static async create({ id, raison_sociale, nom_client, adresse_postale, adresse_facturation, etat_client, contact, nom_contact, contacts, id_commercial }) {
     const finalNom = raison_sociale || nom_client || 'Nouveau Client';
-    const insertQuery = `
-      INSERT INTO Client (raison_sociale, adresse_postale, adresse_facturation, etat_client)
-      VALUES ($1, $2, $3, $4)
-      RETURNING *
-    `;
-    const values = [
-      finalNom,
-      adresse_postale || null,
-      adresse_facturation || null,
-      etat_client || 'Actif'
-    ];
+    const hasCom = await this.hasCommercialColumn();
+    let insertQuery, values;
+
+    if (hasCom) {
+      insertQuery = `
+        INSERT INTO Client (raison_sociale, adresse_postale, adresse_facturation, etat_client, id_commercial)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING *
+      `;
+      values = [
+        finalNom,
+        adresse_postale || null,
+        adresse_facturation || null,
+        etat_client || 'Actif',
+        id_commercial ? parseInt(id_commercial, 10) : null
+      ];
+    } else {
+      insertQuery = `
+        INSERT INTO Client (raison_sociale, adresse_postale, adresse_facturation, etat_client)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *
+      `;
+      values = [
+        finalNom,
+        adresse_postale || null,
+        adresse_facturation || null,
+        etat_client || 'Actif'
+      ];
+    }
+
     const { rows } = await db.query(insertQuery, values);
     const newClient = rows[0];
 
-    // Si un contact est fourni, l'insérer dans la table Contact
-    if (contact || nom_contact) {
+    // Traitement des contacts multiples ou simple
+    if (Array.isArray(contacts) && contacts.length > 0) {
+      for (const ct of contacts) {
+        if (!ct.valeur && !ct.nom_contact) continue;
+        const cleanNom = (ct.nom_contact || '').replace(/^\[.*?\]\s*/, '').trim();
+        const fallbackNom = (ct.type && ct.type !== 'Autre')
+          ? (ct.type === 'Email' ? 'email' : ct.type.toLowerCase())
+          : (ct.valeur && String(ct.valeur).includes('@') ? 'email' : 'contact');
+        const finalNomContact = cleanNom || fallbackNom;
+        await db.query(`
+          INSERT INTO Contact (id_client, nom_contact, valeur, est_principal)
+          VALUES ($1, $2, $3, $4)
+        `, [newClient.id, finalNomContact, (ct.valeur || '').trim() || 'N/A', Boolean(ct.est_principal)]);
+      }
+    } else if (contact || nom_contact) {
+      const cleanNom = (nom_contact || '').replace(/^\[.*?\]\s*/, '').trim();
+      const fallbackNom = (contact && String(contact).includes('@')) ? 'email' : 'Contact Principal';
       await db.query(`
         INSERT INTO Contact (id_client, nom_contact, valeur, est_principal)
         VALUES ($1, $2, $3, TRUE)
-      `, [newClient.id, nom_contact || 'Contact Principal', contact || 'N/A']);
+      `, [newClient.id, cleanNom || fallbackNom, (contact || '').trim() || 'N/A']);
     }
 
     return this.getById(newClient.id);
   }
 
-  static async update(id, { raison_sociale, nom_client, adresse_postale, adresse_facturation, etat_client, contact, nom_contact }) {
+  static async update(id, { raison_sociale, nom_client, adresse_postale, adresse_facturation, etat_client, contact, nom_contact, contacts, id_commercial }) {
     const finalNom = raison_sociale || nom_client;
-    await db.query(`
-      UPDATE Client
-      SET raison_sociale = COALESCE($1, raison_sociale),
-          adresse_postale = COALESCE($2, adresse_postale),
-          adresse_facturation = COALESCE($3, adresse_facturation),
-          etat_client = COALESCE($4, etat_client)
-      WHERE id = $5
-    `, [
-      finalNom || null,
-      adresse_postale !== undefined ? adresse_postale : null,
-      adresse_facturation !== undefined ? adresse_facturation : null,
-      etat_client || null,
-      id
-    ]);
+    const hasCom = await this.hasCommercialColumn();
 
-    if (contact) {
+    if (hasCom) {
+      await db.query(`
+        UPDATE Client
+        SET raison_sociale = COALESCE($1, raison_sociale),
+            adresse_postale = COALESCE($2, adresse_postale),
+            adresse_facturation = COALESCE($3, adresse_facturation),
+            etat_client = COALESCE($4, etat_client),
+            id_commercial = COALESCE($5, id_commercial)
+        WHERE id = $6
+      `, [
+        finalNom || null,
+        adresse_postale !== undefined ? adresse_postale : null,
+        adresse_facturation !== undefined ? adresse_facturation : null,
+        etat_client || null,
+        id_commercial !== undefined ? (id_commercial ? parseInt(id_commercial, 10) : null) : null,
+        id
+      ]);
+    } else {
+      await db.query(`
+        UPDATE Client
+        SET raison_sociale = COALESCE($1, raison_sociale),
+            adresse_postale = COALESCE($2, adresse_postale),
+            adresse_facturation = COALESCE($3, adresse_facturation),
+            etat_client = COALESCE($4, etat_client)
+        WHERE id = $5
+      `, [
+        finalNom || null,
+        adresse_postale !== undefined ? adresse_postale : null,
+        adresse_facturation !== undefined ? adresse_facturation : null,
+        etat_client || null,
+        id
+      ]);
+    }
+
+    if (Array.isArray(contacts)) {
+      // Synchronisation : Remplacer les contacts par la nouvelle liste
+      await db.query('DELETE FROM Contact WHERE id_client = $1', [id]);
+      for (const ct of contacts) {
+        if (!ct.valeur && !ct.nom_contact) continue;
+        const cleanNom = (ct.nom_contact || '').replace(/^\[.*?\]\s*/, '').trim();
+        const fallbackNom = (ct.type && ct.type !== 'Autre')
+          ? (ct.type === 'Email' ? 'email' : ct.type.toLowerCase())
+          : (ct.valeur && String(ct.valeur).includes('@') ? 'email' : 'contact');
+        const finalNomContact = cleanNom || fallbackNom;
+        await db.query(`
+          INSERT INTO Contact (id_client, nom_contact, valeur, est_principal)
+          VALUES ($1, $2, $3, $4)
+        `, [id, finalNomContact, (ct.valeur || '').trim() || 'N/A', Boolean(ct.est_principal)]);
+      }
+    } else if (contact) {
       // Upsert contact principal
+      const cleanNom = (nom_contact || '').replace(/^\[.*?\]\s*/, '').trim();
+      const fallbackNom = (contact && String(contact).includes('@')) ? 'email' : 'Contact Principal';
       const existContact = await db.query('SELECT id FROM Contact WHERE id_client = $1 AND est_principal = TRUE', [id]);
       if (existContact.rows.length > 0) {
         await db.query('UPDATE Contact SET valeur = $1, nom_contact = COALESCE($2, nom_contact) WHERE id = $3', [
-          contact,
-          nom_contact || null,
+          (contact || '').trim(),
+          cleanNom || fallbackNom,
           existContact.rows[0].id
         ]);
       } else {
         await db.query('INSERT INTO Contact (id_client, nom_contact, valeur, est_principal) VALUES ($1, $2, $3, TRUE)', [
           id,
-          nom_contact || 'Contact Principal',
-          contact
+          cleanNom || fallbackNom,
+          (contact || '').trim()
         ]);
       }
     }

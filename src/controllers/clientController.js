@@ -46,6 +46,15 @@ class ClientController {
       return sendError(res, error);
     }
   }
+
+  static async getContacts(req, res) {
+    try {
+      const data = await ClientService.getContacts(req.params.id);
+      return res.status(200).json({ status: 'success', count: data.length, data });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  }
 }
 
 module.exports = ClientController;

@@ -304,13 +304,23 @@ async function envoieMailAutomatique() {
         continue;
       }
 
-      // 4. Récupération du contact email du client (privilégie le contact principal avec email valide)
+      // 4. Récupération du contact email du client
+      // Privilégie un contact avec nom_contact = 'email' (ou contenant email/mail), avec adresse email valide
       const contactRes = await db.query(`
         SELECT nom_contact, valeur, est_principal
         FROM Contact
         WHERE id_client = $1 
-          AND valeur LIKE '%@%'
-        ORDER BY est_principal DESC, id ASC
+          AND TRIM(valeur) LIKE '%@%'
+        ORDER BY 
+          CASE 
+            WHEN LOWER(TRIM(nom_contact)) = 'email' AND est_principal = TRUE THEN 1
+            WHEN LOWER(TRIM(nom_contact)) = 'email' THEN 2
+            WHEN (LOWER(nom_contact) LIKE '%email%' OR LOWER(nom_contact) LIKE '%mail%') AND est_principal = TRUE THEN 3
+            WHEN LOWER(nom_contact) LIKE '%email%' OR LOWER(nom_contact) LIKE '%mail%' THEN 4
+            WHEN est_principal = TRUE THEN 5
+            ELSE 6
+          END ASC, 
+          id ASC
         LIMIT 1
       `, [abo.id_client]);
 
@@ -321,7 +331,10 @@ async function envoieMailAutomatique() {
 
       const contact = contactRes.rows[0];
       const destEmail = contact.valeur.trim();
-      const destNom = contact.nom_contact?.trim() || abo.nom_client || 'Madame, Monsieur';
+      const contactNomTrim = (contact.nom_contact || '').replace(/^\[.*?\]\s*/, '').trim();
+      const isGenericNom = !contactNomTrim || 
+        ['email', 'mail', 'contact', 'telephone', 'autre'].includes(contactNomTrim.toLowerCase());
+      const destNom = !isGenericNom ? contactNomTrim : (abo.nom_client || 'Madame, Monsieur');
       const dateFr = dateTerme.toLocaleDateString('fr-FR');
       const supportsStr = abo.supports || 'publicitaire(s)';
       const interlocuteurStr = abo.nom_commercial
