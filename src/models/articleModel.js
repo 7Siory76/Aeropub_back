@@ -152,8 +152,7 @@ class ArticleModel {
       -- 8. PIÈCES JOINTES ET DOCUMENTS
       CREATE TABLE IF NOT EXISTS Document_Lie (
           id SERIAL PRIMARY KEY,
-          id_abonnement VARCHAR(50) REFERENCES Abonnement(reference) ON DELETE SET NULL,
-          id_client INT REFERENCES Client(id) ON DELETE SET NULL,
+          id_abonnement VARCHAR(50) REFERENCES Abonnement(reference) ON DELETE CASCADE,
           reference_support VARCHAR(50) REFERENCES Support(reference) ON DELETE SET NULL,
           nom_fichier VARCHAR(255) NOT NULL,
           url_chemin VARCHAR(500) NOT NULL,

@@ -209,7 +209,6 @@ class ClientModel {
     }
     await db.query('DELETE FROM Contact WHERE id_client = $1', [id]);
     await db.query('DELETE FROM Action_Commerciale WHERE id_client = $1', [id]);
-    await db.query('DELETE FROM Document_Lie WHERE id_client = $1', [id]);
     const { rows } = await db.query('DELETE FROM Client WHERE id = $1 RETURNING *', [id]);
     return rows[0];
   }

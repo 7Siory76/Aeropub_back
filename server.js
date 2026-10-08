@@ -24,7 +24,7 @@ const journalRoutes = require('./src/routes/journalNotificationRoutes');
 const modeleCourrielRoutes = require('./src/routes/modeleCourrielRoutes');
 const ZoneController = require('./src/controllers/zoneController');
 const { initAbonnementCron } = require('./src/services/cronService');
-
+const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -33,6 +33,7 @@ app.use(cors()); // Autorise les requêtes Cross-Origin
 app.use(express.json()); // Parsing des corps de requêtes JSON
 app.use(express.urlencoded({ extended: true }));
 
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // 2. Définition des Routes API
 app.use('/api/csv', csvRoutes);
 app.use('/api/articles', articleRoutes);
@@ -99,5 +100,6 @@ const startServer = async () => {
     console.error('❌ Erreur critique lors du démarrage du serveur:', error);
   }
 };
+
 
 startServer();
