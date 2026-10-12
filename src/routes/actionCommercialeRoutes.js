@@ -4,6 +4,7 @@ const ActionCommercialeController = require('../controllers/actionCommercialeCon
 
 router.get('/', ActionCommercialeController.getAll);
 router.post('/relance-manuelle', ActionCommercialeController.envoyerRelanceManuelle);
+router.post('/preavis-reconduction', ActionCommercialeController.envoyerPreavisReconduction);
 router.get('/:id', ActionCommercialeController.getById);
 router.post('/', ActionCommercialeController.create);
 router.put('/:id', ActionCommercialeController.update);

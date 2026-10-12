@@ -3,21 +3,11 @@ const { sendError } = require('../utils/errorHandler');
 
 class FormatController {
   static async getAll(req, res) {
-    try {
-      const data = await FormatService.getAll();
-      return res.status(200).json({ status: 'success', count: data.length, data });
-    } catch (error) {
-      return sendError(res, error);
-    }
+    return res.status(200).json({ status: 'success', count: 0, data: [] });
   }
 
   static async getById(req, res) {
-    try {
-      const data = await FormatService.getById(req.params.id);
-      return res.status(200).json({ status: 'success', data });
-    } catch (error) {
-      return sendError(res, error);
-    }
+    return res.status(200).json({ status: 'success', data: null });
   }
 
   static async create(req, res) {

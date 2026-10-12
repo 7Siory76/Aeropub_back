@@ -8,5 +8,6 @@ const CsvController = require('../controllers/csvController');
  * Utilise le middleware Multer `upload.single('file')` pour intercepter le fichier dans FormData
  */
 router.post('/upload', upload.single('file'), CsvController.uploadCsv);
+router.post('/import-infrastructure', upload.single('file'), CsvController.importInfrastructure);
 
 module.exports = router;

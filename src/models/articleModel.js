@@ -52,6 +52,11 @@ class ArticleModel {
           nom VARCHAR(50) UNIQUE 
       );
 
+      CREATE TABLE IF NOT EXISTS Format (
+          id SERIAL PRIMARY KEY,
+          ref_format VARCHAR(100) UNIQUE NOT NULL
+      );
+
       -- NOUVEAU : Référentiel des états possibles pour un support
       CREATE TABLE IF NOT EXISTS Type_Etat_Support (
           id SERIAL PRIMARY KEY,
@@ -115,7 +120,6 @@ class ArticleModel {
           date_echeance TIMESTAMP NOT NULL,
           reconduction_tacite BOOLEAN DEFAULT FALSE,
           preavis_jours INT DEFAULT 30,
-          probabilite_renouvellement INT, 
           motif_non_renouvellement TEXT,
           date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -195,7 +199,13 @@ class ArticleModel {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `;
-    return db.query(queryText);
+    const result = await db.query(queryText);
+    try {
+      await db.query('ALTER TABLE Abonnement DROP COLUMN IF EXISTS probabilite_renouvellement;');
+    } catch (dropErr) {
+      // Ignorer si l'utilisateur DB n'est pas propriétaire de la table
+    }
+    return result;
   }
 
   static async getAll() {

@@ -23,6 +23,18 @@ class CsvController {
       return sendError(res, error);
     }
   }
+
+  static async importInfrastructure(req, res) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ status: 'error', message: 'Aucun fichier CSV téléversé. ' });
+      }
+      const rapport = await CsvService.processInfrastructureCsv(req.file.path);
+      return res.status(200).json({ status: 'success', data: rapport });
+    } catch (error) {
+      return res.status(400).json({ status: 'error', message: error.message });
+    }
+  }
 }
 
 module.exports = CsvController;

@@ -4,6 +4,7 @@ const db = require('../config/db');
 const AbonnementModel = require('../models/abonnementModel');
 const JournalNotificationModel = require('../models/journalNotificationModel');
 const ActionCommercialeModel = require('../models/actionCommercialeModel');
+const ActionCommercialeService = require('./actionCommercialeService');
 
 /**
  * 1. Vérifie les échéances à 90j, 30j, 15j et 7j et envoie une alerte dans Journal_Notification
@@ -20,6 +21,8 @@ async function verifierAlertesEcheances() {
             a.reference, 
             a.id_commercial,
             a.date_echeance AS date_terme,
+            a.reconduction_tacite,
+            a.preavis_jours,
             cl.raison_sociale AS nom_client,
             u.nom AS nom_commercial
           FROM Abonnement a
@@ -83,6 +86,8 @@ async function verifierAlertesEcheances() {
       if (checkAlerte.rows.length === 0) {
         const dateFr = dateTerme.toLocaleDateString('fr-FR');
         const clientInfo = abo.nom_client ? ` (${abo.nom_client})` : '';
+        const isTacite = abo.reconduction_tacite === true || abo.reconduction_tacite === 'true' || abo.reconduction_tacite === 1;
+        const typeInfo = isTacite ? ` [Reconduction tacite - préavis ${abo.preavis_jours || 30}j]` : '';
 
         await JournalNotificationModel.logAction({
           id_utilisateur: abo.id_commercial || null,
@@ -92,9 +97,11 @@ async function verifierAlertesEcheances() {
           valeur_apres: {
             palier: palier,
             diffJours: diffJours,
-            date_echeance: abo.date_terme
+            date_echeance: abo.date_terme,
+            reconduction_tacite: isTacite,
+            preavis_jours: abo.preavis_jours || 30
           },
-          message_notification: `[Alerte J-${palier}] Le contrat ${abo.reference}${clientInfo} arrive à échéance dans ${diffJours} jour(s) (le ${dateFr}). Aucun renouvellement enregistré.`
+          message_notification: `[Alerte J-${palier}] Le contrat ${abo.reference}${clientInfo} arrive à échéance dans ${diffJours} jour(s) (le ${dateFr})${typeInfo}. Aucun renouvellement enregistré.`
         });
 
         console.log(`[CRON] Alerte J-${palier} envoyée pour le contrat ${abo.reference} (reste ${diffJours} jour(s)).`);
@@ -106,28 +113,188 @@ async function verifierAlertesEcheances() {
 }
 
 /**
- * 2. Vérifie les contrats arrivés à échéance et les passe en expiré + libère les supports
+ * 2. Renouvelle automatiquement un contrat sous clause de reconduction tacite
+ *    - Calcule la nouvelle période selon la périodicité contractuelle
+ *    - Crée le contrat enfant sous référence suivante avec id_abonnement_precedent
+ *    - Transfère les supports du parent et maintient leur état 'occupé'
+ *    - Clôture l'ancien contrat en statut 'renouvelé'
+ *    - Trace l'événement dans Action_Commerciale et dans Journal_Notification (audit)
+ */
+async function renouvelerContratTacitement(abo) {
+  try {
+    console.log(`[CRON - RECONDUCTION] Démarrage du renouvellement automatique pour ${abo.reference}...`);
+
+    const newDateDebut = new Date(abo.date_echeance);
+    const periodiciteClean = (abo.periodicite || '').trim().toLowerCase();
+    let newDateEcheance = new Date(newDateDebut);
+
+    if (periodiciteClean.includes('mensuel') || periodiciteClean.includes('mois')) {
+      newDateEcheance.setMonth(newDateEcheance.getMonth() + 1);
+    } else if (periodiciteClean.includes('trimestr')) {
+      newDateEcheance.setMonth(newDateEcheance.getMonth() + 3);
+    } else if (periodiciteClean.includes('semestr')) {
+      newDateEcheance.setMonth(newDateEcheance.getMonth() + 6);
+    } else if (periodiciteClean.includes('annuel') || periodiciteClean.includes('an')) {
+      newDateEcheance.setFullYear(newDateEcheance.getFullYear() + 1);
+    } else {
+      const dureeMs = new Date(abo.date_echeance).getTime() - new Date(abo.date_debut).getTime();
+      if (dureeMs > 0) {
+        newDateEcheance = new Date(newDateDebut.getTime() + dureeMs);
+      } else {
+        newDateEcheance.setFullYear(newDateEcheance.getFullYear() + 1);
+      }
+    }
+
+    // Récupérer les supports associés au contrat parent
+    const supportsRes = await db.query(
+      'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
+      [abo.reference]
+    );
+    const supportRefs = supportsRes.rows.map(r => r.reference_support);
+
+    // A. Clôturer l'ancien statut du contrat parent et le basculer en "renouvelé"
+    const idStatutRenouvele = await AbonnementModel.resolveIdTypeStatut('renouvelé');
+    await db.query(`
+      UPDATE Statut_Abonnement 
+      SET date_fin = CURRENT_TIMESTAMP 
+      WHERE id_abonnement = $1 AND (date_fin IS NULL OR date_fin > CURRENT_TIMESTAMP)
+    `, [abo.reference]);
+
+    await db.query(`
+      INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, date_fin, commentaire)
+      VALUES ($1, $2, CURRENT_TIMESTAMP, NULL, $3)
+    `, [
+      abo.reference,
+      idStatutRenouvele,
+      `[Automatisme CRON] Contrat reconduit tacitement suite à l'échéance du ${new Date(abo.date_echeance).toLocaleDateString('fr-FR')}.`
+    ]);
+
+    // B. Création du nouveau contrat renouvelé (enfant)
+    const newAbo = await AbonnementModel.create({
+      id_client: abo.id_client,
+      id_commercial: abo.id_commercial || 1,
+      id_abonnement_precedent: abo.reference,
+      annonceur_campagne: abo.annonceur_campagne || null,
+      tarif: abo.tarif,
+      devise: abo.devise || 'MGA',
+      periodicite: abo.periodicite || 'Annuel',
+      date_debut: newDateDebut,
+      date_echeance: newDateEcheance,
+      reconduction_tacite: true,
+      preavis_jours: abo.preavis_jours ? parseInt(abo.preavis_jours, 10) : 30,
+      statut: 'actif',
+      supports: supportRefs
+    });
+
+    const newRef = newAbo.reference;
+    const dateEcheanceFr = new Date(abo.date_echeance).toLocaleDateString('fr-FR');
+    const newDateDebutFr = newDateDebut.toLocaleDateString('fr-FR');
+    const newDateEcheanceFr = newDateEcheance.toLocaleDateString('fr-FR');
+
+    // C. Mettre à jour le commentaire du contrat parent avec la référence générée
+    await db.query(`
+      UPDATE Statut_Abonnement 
+      SET commentaire = $1
+      WHERE id_abonnement = $2 AND id_type_statut = $3 AND date_fin IS NULL
+    `, [
+      `[Automatisme CRON] Contrat reconduit tacitement avec succès vers ${newRef}.`,
+      abo.reference,
+      idStatutRenouvele
+    ]);
+
+    // D. Enregistrement dans Action_Commerciale (pour le contrat précédent et le nouveau contrat)
+    await ActionCommercialeModel.create({
+      id_abonnement: abo.reference,
+      id_client: abo.id_client,
+      id_utilisateur: abo.id_commercial || 1,
+      type_action: 'Reconduction Tacite',
+      description: `Reconduction tacite automatique exécutée à l'échéance du ${dateEcheanceFr}. Le contrat a été renouvelé sous la nouvelle référence ${newRef} (Période : ${newDateDebutFr} au ${newDateEcheanceFr}).`,
+      statut_envoi_email: 'Validé'
+    });
+
+    await ActionCommercialeModel.create({
+      id_abonnement: newRef,
+      id_client: abo.id_client,
+      id_utilisateur: abo.id_commercial || 1,
+      type_action: 'Reconduction Tacite',
+      description: `Nouveau contrat généré automatiquement par reconduction tacite en succession du contrat ${abo.reference} (Période : ${newDateDebutFr} au ${newDateEcheanceFr}).`,
+      statut_envoi_email: 'Validé'
+    });
+
+    // E. Journal d'audit (Journal_Notification)
+    await JournalNotificationModel.logAction({
+      id_utilisateur: abo.id_commercial || null,
+      categorie_action: 'RECONDUCTION_TACITE_AUTO',
+      entite_concernee: 'ABONNEMENT',
+      reference_entite: newRef,
+      valeur_apres: {
+        action: 'reconduction_tacite_automatique',
+        contrat_precedent: abo.reference,
+        nouveau_contrat: newRef,
+        date_debut: newDateDebut,
+        date_echeance: newDateEcheance,
+        periodicite: abo.periodicite,
+        supports: supportRefs,
+        client: abo.nom_client || abo.id_client
+      },
+      message_notification: `[Reconduction Tacite Automatique] Le contrat ${abo.reference} est arrivé à son terme le ${dateEcheanceFr} et a été automatiquement reconduit sous la référence ${newRef} jusqu'au ${newDateEcheanceFr}.`
+    });
+
+    await JournalNotificationModel.logAction({
+      id_utilisateur: abo.id_commercial || null,
+      categorie_action: 'STATUT',
+      entite_concernee: 'ABONNEMENT',
+      reference_entite: abo.reference,
+      valeur_apres: {
+        statut: 'renouvelé',
+        nouveau_contrat: newRef
+      },
+      message_notification: `Le contrat ${abo.reference} a été clôturé avec le statut "renouvelé" suite à sa reconduction tacite automatique vers ${newRef}.`
+    });
+
+    console.log(`[CRON - RECONDUCTION] ✅ Contrat ${abo.reference} reconduit automatiquement vers ${newRef} !`);
+    return newAbo;
+  } catch (err) {
+    console.error(`[CRON - RECONDUCTION] ❌ Erreur renouvellement automatique ${abo.reference} :`, err);
+    throw err;
+  }
+}
+
+/**
+ * 2. Vérifie les contrats arrivés à échéance :
+ *    - Si reconduction_tacite = TRUE -> Renouvellement automatique
+ *    - Si non tacite -> Passage en "expiré" et libération des supports
+ *    Historise toutes les actions dans Action_Commerciale et Journal_Notification.
  */
 async function verifierEtExpirerAbonnements() {
   try {
-    console.log('[CRON] Vérification des contrats arrivés à échéance ...');
+    console.log('[CRON] Vérification des contrats arrivés à échéance (renouvellement auto ou expiration)...');
 
-    // 1. Recupération de l'id du statut "expiré"
+    // 1. Récupération de l'id du statut "expiré"
     const statutExpRes = await db.query(
       "SELECT id FROM Type_Statut_Abonnement WHERE LOWER(nom_statut) = 'expiré' OR " +
       "LOWER(nom_statut) = 'expire' LIMIT 1"
     );
     const idStatutExpire = statutExpRes.rows[0]?.id || 6;
 
-    // 2. Sélectionner les abonnements échus sans renouvellement
+    // 2. Sélectionner les abonnements échus sans renouvellement enregistré
     const query = `
           SELECT 
             a.reference, 
+            a.id_client,
             a.id_commercial,
+            a.date_debut,
             a.date_echeance,
+            a.reconduction_tacite,
+            a.preavis_jours,
+            a.periodicite,
+            a.tarif,
+            a.devise,
+            a.annonceur_campagne,
+            cl.raison_sociale AS nom_client,
             st.statut AS dernier_statut
           FROM Abonnement a
-          -- Dernier statut connu de l'abonnement
+          LEFT JOIN Client cl ON a.id_client = cl.id
           LEFT JOIN LATERAL (
             SELECT sa.id_type_statut, tsa.nom_statut AS statut
             FROM Statut_Abonnement sa
@@ -138,33 +305,47 @@ async function verifierEtExpirerAbonnements() {
           WHERE 
             -- Échéance atteinte (aujourd'hui ou passée)
             (a.date_echeance <= CURRENT_TIMESTAMP)
-            -- Dernier statut actif (ou non déjà clôturé)
+            -- Dernier statut actif
             AND LOWER(COALESCE(st.statut, 'actif')) = 'actif'
-            -- AUCUN contrat renouvelé n'a pris la suite
+            -- AUCUN contrat renouvelé n'a déjà pris la suite
             AND NOT EXISTS (
               SELECT 1 FROM Abonnement child 
               WHERE child.id_abonnement_precedent = a.reference
             )
         `;
 
-    const { rows: contratsAExpirer } = await db.query(query);
-    if (contratsAExpirer.length === 0) {
-      console.log('[CRON] Aucun contrat à expirer aujourd’hui.');
+    const { rows: contratsEchus } = await db.query(query);
+    if (contratsEchus.length === 0) {
+      console.log('[CRON] Aucun contrat échu à traiter aujourd’hui.');
       return;
     }
-    console.log(`[CRON] ${contratsAExpirer.length} contrat(s) à passer à l'état expiré.`);
+    console.log(`[CRON] ${contratsEchus.length} contrat(s) échu(s) détecté(s).`);
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
     const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-    for (const abo of contratsAExpirer) {
+    for (const abo of contratsEchus) {
       const ref = abo.reference;
+      const isTacite = abo.reconduction_tacite === true || abo.reconduction_tacite === 'true' || abo.reconduction_tacite === 1;
+
+      // Cas 1 : Contrat sous clause de reconduction tacite -> RENOUVELLEMENT AUTOMATIQUE
+      if (isTacite) {
+        try {
+          await renouvelerContratTacitement(abo);
+        } catch (e) {
+          console.error(`[CRON] Échec renouvellement tacite pour ${ref} :`, e.message);
+        }
+        continue;
+      }
+
+      // Cas 2 : Contrat standard sans reconduction tacite -> EXPIRATION
       // A. Clôturer l'ancien statut dans Statut_Abonnement
       await db.query(`
               UPDATE Statut_Abonnement 
               SET date_fin = CURRENT_TIMESTAMP 
               WHERE id_abonnement = $1 AND (date_fin IS NULL OR date_fin > CURRENT_TIMESTAMP)
             `, [ref]);
+
       // B. Insérer la nouvelle ligne avec le statut "expiré"
       await db.query(`
               INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, date_fin, commentaire)
@@ -174,9 +355,21 @@ async function verifierEtExpirerAbonnements() {
         idStatutExpire,
         `[Automatisme CRON du ${dateStr}] Échéance contractuelle atteinte sans renouvellement.`
       ]);
+
       // C. Libérer automatiquement les supports associés vers l'état 'disponible'
       await AbonnementModel.cascadeStatutToSupports(ref, 'expiré', abo.id_commercial);
-      // D. Créer une notification dans le journal
+
+      // D. Historique dans Action_Commerciale
+      await ActionCommercialeModel.create({
+        id_abonnement: ref,
+        id_client: abo.id_client,
+        id_utilisateur: abo.id_commercial || 1,
+        type_action: 'Expiration Contrat',
+        description: `Contrat arrivé à terme le ${new Date(abo.date_echeance).toLocaleDateString('fr-FR')} sans renouvellement. Les supports associés ont été libérés.`,
+        statut_envoi_email: 'N/A'
+      });
+
+      // E. Créer une notification dans le journal d'audit
       await JournalNotificationModel.logAction({
         id_utilisateur: abo.id_commercial || null,
         categorie_action: 'STATUT',
@@ -188,7 +381,7 @@ async function verifierEtExpirerAbonnements() {
       console.log(`[CRON] Contrat ${ref} marqué comme expiré, supports libérés.`);
     }
   } catch (error) {
-    console.error('[CRON] Erreur lors de l’expiration automatique des contrats :', error);
+    console.error('[CRON] Erreur lors du traitement des contrats échus :', error);
   }
 }
 
@@ -247,6 +440,8 @@ async function envoieMailAutomatique() {
         a.id_client,
         a.id_commercial,
         a.date_echeance,
+        a.reconduction_tacite,
+        a.preavis_jours,
         cl.raison_sociale AS nom_client,
         u.nom AS nom_commercial,
         u.email AS email_commercial,
@@ -288,6 +483,41 @@ async function envoieMailAutomatique() {
       // Si le contrat est déjà expiré ou aujourd'hui même (géré par verifierEtExpirerAbonnements)
       if (diffJours <= 0) continue;
 
+      const isTacite = abo.reconduction_tacite === true || abo.reconduction_tacite === 'true' || abo.reconduction_tacite === 1;
+
+      // Cas 1 : Contrat sous clause de reconduction tacite -> Préavis de résiliation / reconduction
+      if (isTacite) {
+        const preavisJours = parseInt(abo.preavis_jours, 10) || 30;
+        const dateLimitePreavis = new Date(dateTerme.getTime() - preavisJours * 24 * 3600 * 1000);
+        const diffJoursPreavis = Math.ceil((dateLimitePreavis.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+        // Déclencher le préavis si le contrat approche de sa date limite de notification (fenêtre de 30 jours avant la date limite)
+        // OU s'il y a eu une indisponibilité / panne serveur pendant la période d'envoi et qu'aucun mail n'a encore été envoyé (tant que l'échéance n'est pas franchie)
+        if (diffJoursPreavis <= 30 && diffJours > 0) {
+          const checkPreavis = await db.query(`
+            SELECT id FROM Journal_Notification
+            WHERE reference_entite = $1
+              AND categorie_action = 'PREAVIS_RECONDUCTION'
+            LIMIT 1
+          `, [abo.reference]);
+
+          if (checkPreavis.rows.length === 0) {
+            try {
+              const infoRattrapage = diffJoursPreavis < 0
+                ? ` [Rattrapage serveur : préavis dépassé de ${Math.abs(diffJoursPreavis)}j, reste ${diffJours}j avant échéance]`
+                : ` [reste ${diffJoursPreavis}j avant préavis, ${diffJours}j avant échéance]`;
+              console.log(`[CRON - MAIL] Envoi automatique du préavis de reconduction pour le contrat ${abo.reference}${infoRattrapage}...`);
+              await ActionCommercialeService.envoyerPreavisReconduction(abo.reference, abo.id_commercial || 1);
+            } catch (preavisErr) {
+              console.error(`[CRON - MAIL] Échec de l'envoi du préavis pour ${abo.reference} :`, preavisErr.message);
+            }
+          }
+        }
+        // Pour les contrats tacites, ne pas envoyer l'email de relance standard
+        continue;
+      }
+
+      // Cas 2 : Contrats standards sans reconduction tacite
       // Si l'échéance dépasse le seuil de prévention (ex: > 30 jours)
       if (diffJours > nbJoursSeuil) continue;
 
@@ -497,6 +727,19 @@ async function initAbonnementCron() {
       console.error('[CRON] Erreur lors de la vérification dynamique de l\'heure:', e);
     }
   });
+
+  // 3. Rattrapage automatique au démarrage (en cas d'interruption/panne serveur les jours passés)
+  setTimeout(async () => {
+    try {
+      console.log('🔄 [CRON - STARTUP] Démarrage du rattrapage automatique (échéances, alertes et reconductions tacites)...');
+      await verifierAlertesEcheances();
+      await envoieMailAutomatique();
+      await verifierEtExpirerAbonnements();
+      console.log('✅ [CRON - STARTUP] Rattrapage automatique achevé.');
+    } catch (startErr) {
+      console.error('❌ [CRON - STARTUP] Erreur lors du rattrapage automatique initial :', startErr);
+    }
+  }, 3500);
 }
 
 module.exports = {

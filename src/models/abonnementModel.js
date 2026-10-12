@@ -148,7 +148,11 @@ class AbonnementModel {
         COALESCE(sup.first_support, '') AS reference_emplacement,
         COALESCE(st.statut, 'actif') AS statut_abonnement,
         COALESCE(st.statut, 'actif') AS statut,
-        st.id_type_statut
+        st.id_type_statut,
+        EXISTS (
+          SELECT 1 FROM Abonnement child 
+          WHERE child.id_abonnement_precedent = a.reference
+        ) AS a_renouvellement
       FROM Abonnement a
       LEFT JOIN Client cl ON a.id_client = cl.id
       LEFT JOIN Utilisateur u ON a.id_commercial = u.id
@@ -188,7 +192,11 @@ class AbonnementModel {
         COALESCE(sup.first_support, '') AS reference_emplacement,
         COALESCE(st.statut, 'actif') AS statut_abonnement,
         COALESCE(st.statut, 'actif') AS statut,
-        st.id_type_statut
+        st.id_type_statut,
+        EXISTS (
+          SELECT 1 FROM Abonnement child 
+          WHERE child.id_abonnement_precedent = a.reference
+        ) AS a_renouvellement
       FROM Abonnement a
       LEFT JOIN Client cl ON a.id_client = cl.id
       LEFT JOIN Utilisateur u ON a.id_commercial = u.id
@@ -240,8 +248,9 @@ class AbonnementModel {
         AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%resili%'
         AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%annul%'
         AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%expir%'
-        AND a.date_debut <= $4
-        AND a.date_echeance >= $3
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%renouv%'
+        AND a.date_debut < $4
+        AND a.date_echeance > $3
       LIMIT 1
     `;
 
@@ -272,7 +281,6 @@ class AbonnementModel {
     date_fin,
     reconduction_tacite,
     preavis_jours,
-    probabilite_renouvellement,
     motif_non_renouvellement,
     id_type_statut,
     statut,
@@ -328,7 +336,7 @@ class AbonnementModel {
     for (const supRef of allSupports) {
       const conflict = await this.checkSupportConflict({
         supportRef: supRef,
-        excludeAboRef: null,
+        excludeAboRef: id_abonnement_precedent || null,
         dateDebut: finalDateDebut,
         dateFin: finalDateEcheance
       });
@@ -364,9 +372,9 @@ class AbonnementModel {
         reference, id_client, id_commercial, id_abonnement_precedent,
         annonceur_campagne, tarif, devise, periodicite, date_debut,
         date_echeance, reconduction_tacite, preavis_jours,
-        probabilite_renouvellement, motif_non_renouvellement
+        motif_non_renouvellement
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `;
 
@@ -383,7 +391,6 @@ class AbonnementModel {
       finalDateEcheance,
       reconduction_tacite === true || reconduction_tacite === 'true',
       preavis_jours ? parseInt(preavis_jours, 10) : 30,
-      probabilite_renouvellement ? parseInt(probabilite_renouvellement, 10) : 80,
       motif_non_renouvellement || null
     ]);
 
@@ -444,7 +451,6 @@ class AbonnementModel {
     date_fin,
     reconduction_tacite,
     preavis_jours,
-    probabilite_renouvellement,
     motif_non_renouvellement,
     id_type_statut,
     statut,
@@ -591,10 +597,9 @@ class AbonnementModel {
           date_echeance = COALESCE($8, date_echeance),
           reconduction_tacite = COALESCE($9, reconduction_tacite),
           preavis_jours = COALESCE($10, preavis_jours),
-          probabilite_renouvellement = COALESCE($11, probabilite_renouvellement),
-          motif_non_renouvellement = COALESCE($12, motif_non_renouvellement),
-          id_abonnement_precedent = COALESCE($13, id_abonnement_precedent)
-      WHERE reference = $14
+          motif_non_renouvellement = COALESCE($11, motif_non_renouvellement),
+          id_abonnement_precedent = COALESCE($12, id_abonnement_precedent)
+      WHERE reference = $13
     `, [
       id_client ? parseInt(id_client, 10) : null,
       id_commercial ? parseInt(id_commercial, 10) : null,
@@ -606,7 +611,6 @@ class AbonnementModel {
       finalDateEcheance || null,
       reconduction_tacite !== undefined ? (reconduction_tacite === true || reconduction_tacite === 'true') : null,
       preavis_jours !== undefined ? parseInt(preavis_jours, 10) : null,
-      probabilite_renouvellement !== undefined ? parseInt(probabilite_renouvellement, 10) : null,
       motif_non_renouvellement !== undefined ? motif_non_renouvellement : null,
       id_abonnement_precedent !== undefined ? id_abonnement_precedent : null,
       reference
