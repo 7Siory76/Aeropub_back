@@ -2,9 +2,8 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
-const ArticleModel = require('./src/models/articleModel');
+const { initDatabase } = require('./src/config/initDb');
 const csvRoutes = require('./src/routes/csvRoutes');
-const articleRoutes = require('./src/routes/articleRoutes');
 const zoneRoutes = require('./src/routes/zoneRoutes');
 const clientRoutes = require('./src/routes/clientRoutes');
 const localisationRoutes = require('./src/routes/localisationRoutes');
@@ -36,7 +35,6 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // 2. Définition des Routes API
 app.use('/api/csv', csvRoutes);
-app.use('/api/articles', articleRoutes);
 app.use('/api/zones', zoneRoutes);
 app.get('/api/aeroports', ZoneController.getAllAeroports);
 app.get('/api/perimetres', ZoneController.getAllPerimetres);
@@ -80,7 +78,7 @@ const startServer = async () => {
   try {
     if (process.env.DATABASE_URL) {
       try {
-        await ArticleModel.initTable();
+        await initDatabase();
         console.log('✅ Tables PostgreSQL AeroPub base_v3.sql initialisées avec succès.');
       } catch (dbInitErr) {
         console.warn('⚠️ Avertissement lors de l\'initialisation des tables:', dbInitErr.message);

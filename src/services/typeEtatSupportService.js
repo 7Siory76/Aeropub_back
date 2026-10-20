@@ -6,13 +6,13 @@ class TypeEtatSupportService {
   }
 
   static async getById(id) {
-    const item = await TypeEtatSupportModel.getById(id);
-    if (!item) {
+    const typeEtatSupport = await TypeEtatSupportModel.getById(id);
+    if (!typeEtatSupport) {
       const error = new Error(`Type d'état de support introuvable avec l'ID "${id}".`);
       error.statusCode = 404;
       throw error;
     }
-    return item;
+    return typeEtatSupport;
   }
 
   static async create(data) {

@@ -668,10 +668,10 @@ L'équipe commerciale AEROPUB`;
 
 async function getHeureServeurParametree() {
   try {
-    const res = await db.query(
+    const resultatParametrage = await db.query(
       `SELECT valeur FROM Parametrage WHERE LOWER(nom_parametre) = 'heure_serveur' LIMIT 1`
     );
-    return res.rows[0]?.valeur?.trim() || '00:00';
+    return resultatParametrage.rows[0]?.valeur?.trim() || '00:00';
   } catch (error) {
     console.error('[CRON] Erreur lecture Heure_serveur dans Parametrage:', error);
     return '00:00';

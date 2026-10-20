@@ -6,13 +6,13 @@ class ZoneService {
   }
 
   static async getById(id) {
-    const item = await ZoneModel.getById(id);
-    if (!item) {
+    const zone = await ZoneModel.getById(id);
+    if (!zone) {
       const error = new Error(`Zone introuvable avec l'identifiant ${id}.`);
       error.statusCode = 404;
       throw error;
     }
-    return item;
+    return zone;
   }
 
   static async create(data) {

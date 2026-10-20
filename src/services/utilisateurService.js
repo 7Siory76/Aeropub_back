@@ -6,13 +6,13 @@ class UtilisateurService {
   }
 
   static async getById(id) {
-    const item = await UtilisateurModel.getById(id);
-    if (!item) {
+    const utilisateur = await UtilisateurModel.getById(id);
+    if (!utilisateur) {
       const error = new Error(`Utilisateur introuvable avec l'identifiant ${id}.`);
       error.statusCode = 404;
       throw error;
     }
-    return item;
+    return utilisateur;
   }
 
   static async create(data) {

@@ -6,13 +6,13 @@ class ParametrageService {
   }
 
   static async getById(id) {
-    const item = await ParametrageModel.getById(id);
-    if (!item) {
+    const parametrage = await ParametrageModel.getById(id);
+    if (!parametrage) {
       const error = new Error(`Paramétrage avec l'ID ${id} non trouvé`);
       error.statusCode = 404;
       throw error;
     }
-    return item;
+    return parametrage;
   }
 
   static async create(data) {

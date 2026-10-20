@@ -7,6 +7,16 @@ node_modules/
 *.env
 !.env.example
 
+# Private keys, certificates and secrets
+*.pem
+*.key
+*.cert
+*.pfx
+*.p12
+*credentials*.json
+*serviceAccount*.json
+*service-account*.json
+
 # File uploads
 uploads/*
 !uploads/.gitkeep

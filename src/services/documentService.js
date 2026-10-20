@@ -8,13 +8,13 @@ class DocumentService {
   }
 
   static async getById(id) {
-    const item = await DocumentModel.getById(id);
-    if (!item) {
+    const document = await DocumentModel.getById(id);
+    if (!document) {
       const error = new Error(`Document introuvable avec l'identifiant ${id}.`);
       error.status = 404;
       throw error;
     }
-    return item;
+    return document;
   }
 
   static async getByAbonnement(reference) {

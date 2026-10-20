@@ -4,16 +4,16 @@ const JournalNotificationModel = require('./journalNotificationModel');
 class AbonnementModel {
   static async resolveIdTypeStatut(statutOrId) {
     if (!statutOrId) {
-      const res = await db.query("SELECT id FROM Type_Statut_Abonnement WHERE LOWER(nom_statut) = 'actif' LIMIT 1");
-      return res.rows[0]?.id || 3;
+      const resultatStatutActif = await db.query("SELECT id FROM Type_Statut_Abonnement WHERE LOWER(nom_statut) = 'actif' LIMIT 1");
+      return resultatStatutActif.rows[0]?.id || 3;
     }
     if (typeof statutOrId === 'number' || (!isNaN(Number(statutOrId)) && String(statutOrId).trim() !== '')) {
       return parseInt(statutOrId, 10);
     }
     const cleanNom = String(statutOrId).trim();
-    const res = await db.query('SELECT id FROM Type_Statut_Abonnement WHERE LOWER(nom_statut) = LOWER($1) LIMIT 1', [cleanNom]);
-    if (res.rows.length > 0) {
-      return res.rows[0].id;
+    const resultatStatut = await db.query('SELECT id FROM Type_Statut_Abonnement WHERE LOWER(nom_statut) = LOWER($1) LIMIT 1', [cleanNom]);
+    if (resultatStatut.rows.length > 0) {
+      return resultatStatut.rows[0].id;
     }
     try {
       const created = await db.query('INSERT INTO Type_Statut_Abonnement (nom_statut) VALUES ($1) RETURNING id', [cleanNom]);
@@ -44,8 +44,8 @@ class AbonnementModel {
       `, [referenceAbonnement]);
       nomStatut = lastStatut.rows[0]?.nom_statut || 'actif';
     } else if (typeof statutOrId === 'number' || (!isNaN(Number(statutOrId)) && String(statutOrId).trim() !== '')) {
-      const res = await db.query('SELECT nom_statut FROM Type_Statut_Abonnement WHERE id = $1', [parseInt(statutOrId, 10)]);
-      nomStatut = res.rows[0]?.nom_statut || '';
+      const resultatStatutType = await db.query('SELECT nom_statut FROM Type_Statut_Abonnement WHERE id = $1', [parseInt(statutOrId, 10)]);
+      nomStatut = resultatStatutType.rows[0]?.nom_statut || '';
     }
 
     const stClean = String(nomStatut).trim().toLowerCase();
@@ -254,15 +254,15 @@ class AbonnementModel {
       LIMIT 1
     `;
 
-    const res = await db.query(query, [
+    const resultatConflit = await db.query(query, [
       supportRef,
       excludeAboRef || null,
       dateDebut,
       dateFin
     ]);
 
-    if (res.rows.length > 0) {
-      return res.rows[0];
+    if (resultatConflit.rows.length > 0) {
+      return resultatConflit.rows[0];
     }
     return null;
   }

@@ -119,15 +119,15 @@ class CsvService {
       LIMIT 1
     `;
 
-    const res = await clientDb.query(query, [
+    const resultatConflit = await clientDb.query(query, [
       supportRef,
       excludeAboRef || null,
       dateDebut,
       dateFin
     ]);
 
-    if (res.rows.length > 0) {
-      return res.rows[0];
+    if (resultatConflit.rows.length > 0) {
+      return resultatConflit.rows[0];
     }
     return null;
   }

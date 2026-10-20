@@ -6,13 +6,13 @@ class AbonnementService {
   }
 
   static async getById(id) {
-    const item = await AbonnementModel.getById(id);
-    if (!item) {
+    const abonnement = await AbonnementModel.getById(id);
+    if (!abonnement) {
       const error = new Error(`Abonnement introuvable avec la référence "${id}".`);
       error.statusCode = 404;
       throw error;
     }
-    return item;
+    return abonnement;
   }
 
   static async create(data) {

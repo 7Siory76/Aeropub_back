@@ -6,13 +6,13 @@ class TypeStatutAbonnementService {
   }
 
   static async getById(id) {
-    const item = await TypeStatutAbonnementModel.getById(id);
-    if (!item) {
+    const typeStatutAbonnement = await TypeStatutAbonnementModel.getById(id);
+    if (!typeStatutAbonnement) {
       const error = new Error(`Type de statut d'abonnement introuvable avec l'ID "${id}".`);
       error.statusCode = 404;
       throw error;
     }
-    return item;
+    return typeStatutAbonnement;
   }
 
   static async create(data) {

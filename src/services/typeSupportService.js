@@ -6,13 +6,13 @@ class TypeSupportService {
   }
 
   static async getById(id) {
-    const item = await TypeSupportModel.getById(id);
-    if (!item) {
+    const typeSupport = await TypeSupportModel.getById(id);
+    if (!typeSupport) {
       const error = new Error(`TypeSupport avec l'ID ${id} non trouvé`);
       error.statusCode = 404;
       throw error;
     }
-    return item;
+    return typeSupport;
   }
 
   static async create(data) {

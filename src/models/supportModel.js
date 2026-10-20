@@ -4,16 +4,16 @@ const JournalNotificationModel = require('./journalNotificationModel');
 class SupportModel {
   static async resolveIdTypeEtat(etatOrId) {
     if (!etatOrId) {
-      const res = await db.query("SELECT id FROM Type_Etat_Support WHERE LOWER(nom_etat) = 'disponible' LIMIT 1");
-      return res.rows[0]?.id || 1;
+      const resultatEtatDisponible = await db.query("SELECT id FROM Type_Etat_Support WHERE LOWER(nom_etat) = 'disponible' LIMIT 1");
+      return resultatEtatDisponible.rows[0]?.id || 1;
     }
     if (typeof etatOrId === 'number' || (!isNaN(Number(etatOrId)) && String(etatOrId).trim() !== '')) {
       return parseInt(etatOrId, 10);
     }
     const cleanNom = String(etatOrId).trim();
-    const res = await db.query('SELECT id FROM Type_Etat_Support WHERE LOWER(nom_etat) = LOWER($1) LIMIT 1', [cleanNom]);
-    if (res.rows.length > 0) {
-      return res.rows[0].id;
+    const resultatEtat = await db.query('SELECT id FROM Type_Etat_Support WHERE LOWER(nom_etat) = LOWER($1) LIMIT 1', [cleanNom]);
+    if (resultatEtat.rows.length > 0) {
+      return resultatEtat.rows[0].id;
     }
     try {
       const created = await db.query('INSERT INTO Type_Etat_Support (nom_etat) VALUES ($1) RETURNING id', [cleanNom]);

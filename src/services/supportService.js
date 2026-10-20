@@ -6,13 +6,13 @@ class SupportService {
   }
 
   static async getByReference(reference) {
-    const item = await SupportModel.getByReference(reference);
-    if (!item) {
+    const support = await SupportModel.getByReference(reference);
+    if (!support) {
       const error = new Error(`Support avec la référence "${reference}" introuvable.`);
       error.statusCode = 404;
       throw error;
     }
-    return item;
+    return support;
   }
 
   static async create(data) {

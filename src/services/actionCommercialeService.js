@@ -9,13 +9,13 @@ class ActionCommercialeService {
   }
 
   static async getById(id) {
-    const item = await ActionCommercialeModel.getById(id);
-    if (!item) {
+    const actionCommerciale = await ActionCommercialeModel.getById(id);
+    if (!actionCommerciale) {
       const error = new Error(`Action commerciale introuvable avec l'identifiant ${id}.`);
       error.statusCode = 404;
       throw error;
     }
-    return item;
+    return actionCommerciale;
   }
 
   static async create(data) {

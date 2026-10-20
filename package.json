@@ -1,7 +1,7 @@
 {
   "name": "back_office_api",
   "version": "1.0.0",
-  "description": "Serveur API Backend Node.js Express avec PostgreSQL, Multer, csv-parser et Firebase Admin",
+  "description": "Serveur API Backend Node.js Express avec PostgreSQL, Multer et csv-parser",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -12,7 +12,6 @@
     "postgresql",
     "multer",
     "csv-parser",
-    "firebase-admin",
     "mvc"
   ],
   "author": "",
@@ -23,7 +22,6 @@
     "csv-parser": "^3.0.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "firebase-admin": "^12.1.0",
     "multer": "^1.4.5-lts.1",
     "node-cron": "^4.6.0",
     "nodemailer": "^10.0.13",
