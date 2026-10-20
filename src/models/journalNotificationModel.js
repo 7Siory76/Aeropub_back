@@ -90,6 +90,14 @@ class JournalNotificationModel {
         await db.query('UPDATE Journal_Notification SET lu_par_admin = TRUE WHERE lu_par_admin = FALSE;');
         return { success: true };
     }
+
+    /**
+    * Supprimer une notification par son identifiant
+    */
+    static async delete(id) {
+        const { rows } = await db.query('DELETE FROM Journal_Notification WHERE id = $1 RETURNING *;', [id]);
+        return rows[0];
+    }
 }
 
 module.exports = JournalNotificationModel;

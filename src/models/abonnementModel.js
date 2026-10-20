@@ -435,6 +435,7 @@ class AbonnementModel {
       },
       message_notification: `Nouveau contrat ${finalRef} créé avec ${allSupports.length} support(s).`
     });
+
     return this.getById(finalRef);
   }
 
@@ -625,10 +626,10 @@ class AbonnementModel {
       const cleanNomStatut = String(nomStatut).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
       // Si on active ou réactive le contrat, vérifier qu'aucun support n'est déjà réservé par un autre contrat
-      const isActivating = !cleanNomStatut.includes('resili') && 
-                           !cleanNomStatut.includes('archiv') && 
-                           !cleanNomStatut.includes('annul') && 
-                           !cleanNomStatut.includes('expir');
+      const isActivating = !cleanNomStatut.includes('resili') &&
+        !cleanNomStatut.includes('archiv') &&
+        !cleanNomStatut.includes('annul') &&
+        !cleanNomStatut.includes('expir');
 
       if (isActivating) {
         const currentSups = await db.query(

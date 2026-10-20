@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const JournalNotificationModel = require('./journalNotificationModel');
 
 class CategorieModel {
   static async getAll() {
@@ -15,18 +16,48 @@ class CategorieModel {
     const finalNom = nom || nom_categorie;
     const query = 'INSERT INTO Categorie_Support (nom) VALUES ($1) RETURNING id, nom, nom AS nom_categorie';
     const { rows } = await db.query(query, [finalNom]);
-    return rows[0];
+    const created = rows[0];
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'CREATION',
+      entite_concernee: 'CATEGORIE',
+      reference_entite: String(created.id),
+      valeur_apres: created,
+      message_notification: `Nouvelle catégorie de support "${created.nom}" (ID: ${created.id}) créée.`
+    });
+
+    return created;
   }
 
   static async update(id, { nom, nom_categorie }) {
     const finalNom = nom || nom_categorie;
     const query = 'UPDATE Categorie_Support SET nom = $1 WHERE id = $2 RETURNING id, nom, nom AS nom_categorie';
     const { rows } = await db.query(query, [finalNom, id]);
-    return rows[0];
+    const updated = rows[0];
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'MODIFICATION',
+      entite_concernee: 'CATEGORIE',
+      reference_entite: String(id),
+      valeur_apres: updated,
+      message_notification: `Mise à jour de la catégorie de support "${updated.nom}" (ID: ${id}).`
+    });
+
+    return updated;
   }
 
   static async delete(id) {
+    const current = await this.getById(id);
     const { rows } = await db.query('DELETE FROM Categorie_Support WHERE id = $1 RETURNING *', [id]);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'SUPPRESSION',
+      entite_concernee: 'CATEGORIE',
+      reference_entite: String(id),
+      valeur_apres: current,
+      message_notification: `Suppression de la catégorie de support "${current?.nom || id}".`
+    });
+
     return rows[0];
   }
 }

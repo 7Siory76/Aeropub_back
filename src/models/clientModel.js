@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const JournalNotificationModel = require('./journalNotificationModel');
 
 class ClientModel {
   static async getAll() {
@@ -49,51 +50,19 @@ class ClientModel {
     return rows[0];
   }
 
-  static async hasCommercialColumn() {
-    if (this._hasCommercialCol !== undefined) return this._hasCommercialCol;
-    try {
-      const res = await db.query(`
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'client' AND column_name = 'id_commercial'
-      `);
-      this._hasCommercialCol = res.rows.length > 0;
-    } catch {
-      this._hasCommercialCol = false;
-    }
-    return this._hasCommercialCol;
-  }
-
-  static async create({ id, raison_sociale, nom_client, adresse_postale, adresse_facturation, etat_client, contact, nom_contact, contacts, id_commercial }) {
+  static async create({ id, raison_sociale, nom_client, adresse_postale, adresse_facturation, etat_client, contact, nom_contact, contacts }) {
     const finalNom = raison_sociale || nom_client || 'Nouveau Client';
-    const hasCom = await this.hasCommercialColumn();
-    let insertQuery, values;
-
-    if (hasCom) {
-      insertQuery = `
-        INSERT INTO Client (raison_sociale, adresse_postale, adresse_facturation, etat_client, id_commercial)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING *
-      `;
-      values = [
-        finalNom,
-        adresse_postale || null,
-        adresse_facturation || null,
-        etat_client || 'Actif',
-        id_commercial ? parseInt(id_commercial, 10) : null
-      ];
-    } else {
-      insertQuery = `
-        INSERT INTO Client (raison_sociale, adresse_postale, adresse_facturation, etat_client)
-        VALUES ($1, $2, $3, $4)
-        RETURNING *
-      `;
-      values = [
-        finalNom,
-        adresse_postale || null,
-        adresse_facturation || null,
-        etat_client || 'Actif'
-      ];
-    }
+    const insertQuery = `
+      INSERT INTO Client (raison_sociale, adresse_postale, adresse_facturation, etat_client)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `;
+    const values = [
+      finalNom,
+      adresse_postale || null,
+      adresse_facturation || null,
+      etat_client || 'Actif'
+    ];
 
     const { rows } = await db.query(insertQuery, values);
     const newClient = rows[0];
@@ -121,46 +90,36 @@ class ClientModel {
       `, [newClient.id, cleanNom || fallbackNom, (contact || '').trim() || 'N/A']);
     }
 
-    return this.getById(newClient.id);
+    const createdClient = await this.getById(newClient.id);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'CREATION',
+      entite_concernee: 'CLIENT',
+      reference_entite: String(newClient.id),
+      valeur_apres: createdClient,
+      message_notification: `Nouveau client "${createdClient.nom_client || createdClient.raison_sociale}" (ID: ${newClient.id}) créé.`
+    });
+
+    return createdClient;
   }
 
-  static async update(id, { raison_sociale, nom_client, adresse_postale, adresse_facturation, etat_client, contact, nom_contact, contacts, id_commercial }) {
+  static async update(id, { raison_sociale, nom_client, adresse_postale, adresse_facturation, etat_client, contact, nom_contact, contacts }) {
     const finalNom = raison_sociale || nom_client;
-    const hasCom = await this.hasCommercialColumn();
 
-    if (hasCom) {
-      await db.query(`
-        UPDATE Client
-        SET raison_sociale = COALESCE($1, raison_sociale),
-            adresse_postale = COALESCE($2, adresse_postale),
-            adresse_facturation = COALESCE($3, adresse_facturation),
-            etat_client = COALESCE($4, etat_client),
-            id_commercial = COALESCE($5, id_commercial)
-        WHERE id = $6
-      `, [
-        finalNom || null,
-        adresse_postale !== undefined ? adresse_postale : null,
-        adresse_facturation !== undefined ? adresse_facturation : null,
-        etat_client || null,
-        id_commercial !== undefined ? (id_commercial ? parseInt(id_commercial, 10) : null) : null,
-        id
-      ]);
-    } else {
-      await db.query(`
-        UPDATE Client
-        SET raison_sociale = COALESCE($1, raison_sociale),
-            adresse_postale = COALESCE($2, adresse_postale),
-            adresse_facturation = COALESCE($3, adresse_facturation),
-            etat_client = COALESCE($4, etat_client)
-        WHERE id = $5
-      `, [
-        finalNom || null,
-        adresse_postale !== undefined ? adresse_postale : null,
-        adresse_facturation !== undefined ? adresse_facturation : null,
-        etat_client || null,
-        id
-      ]);
-    }
+    await db.query(`
+      UPDATE Client
+      SET raison_sociale = COALESCE($1, raison_sociale),
+          adresse_postale = COALESCE($2, adresse_postale),
+          adresse_facturation = COALESCE($3, adresse_facturation),
+          etat_client = COALESCE($4, etat_client)
+      WHERE id = $5
+    `, [
+      finalNom || null,
+      adresse_postale !== undefined ? adresse_postale : null,
+      adresse_facturation !== undefined ? adresse_facturation : null,
+      etat_client || null,
+      id
+    ]);
 
     if (Array.isArray(contacts)) {
       // Synchronisation : Remplacer les contacts par la nouvelle liste
@@ -197,10 +156,22 @@ class ClientModel {
       }
     }
 
-    return this.getById(id);
+    const updatedClient = await this.getById(id);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'MODIFICATION',
+      entite_concernee: 'CLIENT',
+      reference_entite: String(id),
+      valeur_apres: updatedClient,
+      message_notification: `Mise à jour des informations du client "${updatedClient.nom_client || updatedClient.raison_sociale}" (ID: ${id}).`
+    });
+
+    return updatedClient;
   }
 
   static async delete(id) {
+    const current = await this.getById(id);
+
     const aboCheck = await db.query('SELECT reference FROM Abonnement WHERE id_client = $1 LIMIT 1', [id]);
     if (aboCheck.rows.length > 0) {
       const error = new Error("Impossible de supprimer ce client car il possède un ou plusieurs contrats d'abonnement. Veuillez supprimer ou transférer ses contrats au préalable.");
@@ -210,6 +181,15 @@ class ClientModel {
     await db.query('DELETE FROM Contact WHERE id_client = $1', [id]);
     await db.query('DELETE FROM Action_Commerciale WHERE id_client = $1', [id]);
     const { rows } = await db.query('DELETE FROM Client WHERE id = $1 RETURNING *', [id]);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'SUPPRESSION',
+      entite_concernee: 'CLIENT',
+      reference_entite: String(id),
+      valeur_apres: current,
+      message_notification: `Suppression du client "${current?.nom_client || current?.raison_sociale || id}" (ID: ${id}).`
+    });
+
     return rows[0];
   }
 

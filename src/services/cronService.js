@@ -562,7 +562,7 @@ async function envoieMailAutomatique() {
       const contact = contactRes.rows[0];
       const destEmail = contact.valeur.trim();
       const contactNomTrim = (contact.nom_contact || '').replace(/^\[.*?\]\s*/, '').trim();
-      const isGenericNom = !contactNomTrim || 
+      const isGenericNom = !contactNomTrim ||
         ['email', 'mail', 'contact', 'telephone', 'autre'].includes(contactNomTrim.toLowerCase());
       const destNom = !isGenericNom ? contactNomTrim : (abo.nom_client || 'Madame, Monsieur');
       const dateFr = dateTerme.toLocaleDateString('fr-FR');

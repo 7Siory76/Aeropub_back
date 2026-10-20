@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const JournalNotificationModel = require('./journalNotificationModel');
 
 class ZoneModel {
   static async getAll() {
@@ -51,7 +52,17 @@ class ZoneModel {
     `;
     const values = [finalNom, parseInt(id_aeroport || 1, 10), parseInt(id_perimetre || 1, 10)];
     const { rows } = await db.query(query, values);
-    return this.getById(rows[0].id);
+    const created = await this.getById(rows[0].id);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'CREATION',
+      entite_concernee: 'ZONE',
+      reference_entite: String(created.id),
+      valeur_apres: created,
+      message_notification: `Nouvelle zone "${created.nom_zone}" (ID: ${created.id}) créée.`
+    });
+
+    return created;
   }
 
   static async update(id, { nom_zone, type_zone, id_aeroport, id_perimetre }) {
@@ -71,11 +82,31 @@ class ZoneModel {
       id
     ];
     const { rows } = await db.query(query, values);
-    return this.getById(id);
+    const updated = await this.getById(id);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'MODIFICATION',
+      entite_concernee: 'ZONE',
+      reference_entite: String(id),
+      valeur_apres: updated,
+      message_notification: `Mise à jour de la zone "${updated.nom_zone}" (ID: ${id}).`
+    });
+
+    return updated;
   }
 
   static async delete(id) {
+    const current = await this.getById(id);
     const { rows } = await db.query('DELETE FROM Zone_Terminal WHERE id = $1 RETURNING *', [id]);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'SUPPRESSION',
+      entite_concernee: 'ZONE',
+      reference_entite: String(id),
+      valeur_apres: current,
+      message_notification: `Suppression de la zone "${current?.nom_zone || id}".`
+    });
+
     return rows[0];
   }
 

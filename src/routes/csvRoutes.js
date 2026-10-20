@@ -9,5 +9,7 @@ const CsvController = require('../controllers/csvController');
  */
 router.post('/upload', upload.single('file'), CsvController.uploadCsv);
 router.post('/import-infrastructure', upload.single('file'), CsvController.importInfrastructure);
+router.post('/import-clients', upload.single('file'), CsvController.importClients);
+router.post('/import-abonnements', upload.single('file'), CsvController.importAbonnements);
 
 module.exports = router;
