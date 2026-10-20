@@ -10,7 +10,6 @@ class CsvController {
           message: 'Veuillez transmettre un fichier CSV dans le champ "file".'
         });
       }
-      console.log(`Fichier CSV reçu : ${req.file.originalname}`);
       const result = await CsvService.processCsvFile(req.file.path);
 
       return res.status(200).json({
