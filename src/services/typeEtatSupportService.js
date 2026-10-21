@@ -8,7 +8,7 @@ class TypeEtatSupportService {
   static async getById(id) {
     const typeEtatSupport = await TypeEtatSupportModel.getById(id);
     if (!typeEtatSupport) {
-      const error = new Error(`Type d'état de support introuvable avec l'ID "${id}".`);
+      const error = new Error(`État de support introuvable avec l'identifiant "${id}".`);
       error.statusCode = 404;
       throw error;
     }
@@ -17,7 +17,7 @@ class TypeEtatSupportService {
 
   static async create(data) {
     if (!data.nom_etat || !String(data.nom_etat).trim()) {
-      const error = new Error('Le nom de l\'état (nom_etat) est obligatoire.');
+      const error = new Error("Le nom de l'état est obligatoire.");
       error.statusCode = 400;
       throw error;
     }
@@ -27,7 +27,7 @@ class TypeEtatSupportService {
   static async update(id, data) {
     await this.getById(id);
     if (!data.nom_etat || !String(data.nom_etat).trim()) {
-      const error = new Error('Le nom de l\'état (nom_etat) est obligatoire.');
+      const error = new Error("Le nom de l'état est obligatoire.");
       error.statusCode = 400;
       throw error;
     }

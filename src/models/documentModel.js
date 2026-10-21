@@ -1,23 +1,56 @@
 const db = require('../config/db');
 
 class DocumentModel {
-  static async getAll() {
+  static async getAll(filters = {}) {
+    const { limit, offset, id_abonnement } = filters;
+    const conditions = [];
+    const params = [];
+
+    if (id_abonnement) {
+      params.push(String(id_abonnement).trim());
+      conditions.push(`d.id_abonnement = $${params.length}`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    let paginationClause = '';
+    if (limit !== undefined && !isNaN(Number(limit))) {
+      params.push(parseInt(limit, 10));
+      paginationClause += ` LIMIT $${params.length}`;
+      if (offset !== undefined && !isNaN(Number(offset))) {
+        params.push(parseInt(offset, 10));
+        paginationClause += ` OFFSET $${params.length}`;
+      }
+    }
+
     const query = `
       SELECT 
-        d.*,
+        d.id,
+        d.id_abonnement,
+        d.reference_support,
+        d.nom_fichier,
+        d.url_chemin,
+        d.type_document,
+        d.date_upload,
         c.raison_sociale AS nom_client,
         a.annonceur_campagne
       FROM Document_Lie d
       LEFT JOIN Abonnement a ON d.id_abonnement = a.reference
       LEFT JOIN Client c ON a.id_client = c.id
+      ${whereClause}
       ORDER BY d.date_upload DESC
+      ${paginationClause}
     `;
-    const { rows } = await db.query(query);
+    const { rows } = await db.query(query, params);
     return rows;
   }
 
   static async getById(id) {
-    const query = 'SELECT * FROM Document_Lie WHERE id = $1';
+    const query = `
+      SELECT id, id_abonnement, reference_support, nom_fichier, url_chemin, type_document, date_upload
+      FROM Document_Lie
+      WHERE id = $1
+    `;
     const { rows } = await db.query(query, [id]);
     return rows[0];
   }

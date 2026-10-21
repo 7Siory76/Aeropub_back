@@ -3,8 +3,8 @@ const path = require('path');
 const fs = require('fs');
 
 class DocumentService {
-  static async getAll() {
-    return DocumentModel.getAll();
+  static async getAll(filters) {
+    return DocumentModel.getAll(filters);
   }
 
   static async getById(id) {

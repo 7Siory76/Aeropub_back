@@ -2,10 +2,41 @@ const db = require('../config/db');
 const JournalNotificationModel = require('./journalNotificationModel');
 
 class ClientModel {
-  static async getAll() {
+  static async getAll(filters = {}) {
+    const { limit, offset, search, etat_client } = filters;
+    const conditions = [];
+    const params = [];
+
+    if (search && String(search).trim() !== '') {
+      params.push(`%${String(search).trim().toLowerCase()}%`);
+      conditions.push(`(LOWER(c.raison_sociale) LIKE $${params.length} OR LOWER(COALESCE(c.adresse_postale, '')) LIKE $${params.length})`);
+    }
+
+    if (etat_client) {
+      params.push(String(etat_client).trim());
+      conditions.push(`LOWER(c.etat_client) = LOWER($${params.length})`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    let paginationClause = '';
+    if (limit !== undefined && !isNaN(Number(limit))) {
+      params.push(parseInt(limit, 10));
+      paginationClause += ` LIMIT $${params.length}`;
+      if (offset !== undefined && !isNaN(Number(offset))) {
+        params.push(parseInt(offset, 10));
+        paginationClause += ` OFFSET $${params.length}`;
+      }
+    }
+
     const query = `
       SELECT 
-        c.*,
+        c.id,
+        c.raison_sociale,
+        c.adresse_postale,
+        c.adresse_facturation,
+        c.etat_client,
+        c.date_creation,
         c.raison_sociale AS nom_client,
         COALESCE(ct.contacts_val, 'Aucun contact') AS contact,
         ct.nom_contact_principal,
@@ -21,16 +52,23 @@ class ClientModel {
         FROM Contact
         WHERE id_client = c.id
       ) ct ON true
+      ${whereClause}
       ORDER BY c.raison_sociale ASC
+      ${paginationClause}
     `;
-    const { rows } = await db.query(query);
+    const { rows } = await db.query(query, params);
     return rows;
   }
 
   static async getById(id) {
     const query = `
       SELECT 
-        c.*,
+        c.id,
+        c.raison_sociale,
+        c.adresse_postale,
+        c.adresse_facturation,
+        c.etat_client,
+        c.date_creation,
         c.raison_sociale AS nom_client,
         COALESCE(ct.contacts_val, 'Aucun contact') AS contact,
         ct.nom_contact_principal,
@@ -194,7 +232,10 @@ class ClientModel {
   }
 
   static async getContacts(clientId) {
-    const { rows } = await db.query('SELECT * FROM Contact WHERE id_client = $1 ORDER BY est_principal DESC, id ASC', [clientId]);
+    const { rows } = await db.query(
+      'SELECT id, id_client, nom_contact, valeur, est_principal FROM Contact WHERE id_client = $1 ORDER BY est_principal DESC, id ASC',
+      [clientId]
+    );
     return rows;
   }
 }

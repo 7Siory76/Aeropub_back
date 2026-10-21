@@ -1,8 +1,8 @@
 const AbonnementModel = require('../models/abonnementModel');
 
 class AbonnementService {
-  static async getAll() {
-    return AbonnementModel.getAll();
+  static async getAll(filters) {
+    return AbonnementModel.getAll(filters);
   }
 
   static async getById(id) {
@@ -17,7 +17,7 @@ class AbonnementService {
 
   static async create(data) {
     if (!data.id_client) {
-      const error = new Error('Le client (id_client) est requis pour créer un abonnement.');
+      const error = new Error('Le client est requis pour créer un contrat.');
       error.statusCode = 400;
       throw error;
     }

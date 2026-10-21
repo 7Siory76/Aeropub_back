@@ -4,7 +4,7 @@ const { sendError } = require('../utils/errorHandler');
 class ActionCommercialeController {
   static async getAll(req, res) {
     try {
-      const data = await ActionCommercialeService.getAll();
+      const data = await ActionCommercialeService.getAll(req.query);
       return res.status(200).json({ status: 'success', count: data.length, data });
     } catch (error) {
       return sendError(res, error);

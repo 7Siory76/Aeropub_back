@@ -4,11 +4,11 @@ const db = require('../config/db');
 const JournalNotificationModel = require('../models/journalNotificationModel');
 
 /**
- * SERVICE : Traitement du fichier CSV AeroPub pour le schéma base_v3.sql
+ * Service de traitement et d'import des fichiers CSV AeroPub.
  */
 class CsvService {
   /**
-   * Lit, analyse et insère le CSV dans PostgreSQL en respectant les relations de base_v3.sql
+   * Analyse et importe les données CSV en base en garantissant l'intégrité relationnelle.
    * @param {string} filePath - Chemin vers le fichier CSV temporaire
    */
 
@@ -268,18 +268,36 @@ class CsvService {
         }
       }
 
-      // Helper pour trouver ou insérer une entité de référence de façon sécurisée
+      // Helper sécurisé avec whitelist stricte pour trouver ou insérer une entité de référence
+      const ALLOWED_REF_MAPPINGS = Object.freeze({
+        'aeroport': { table: 'Aeroport', col: 'nom' },
+        'perimetre': { table: 'Perimetre', col: 'nom' },
+        'zone_terminal': { table: 'Zone_Terminal', col: 'nom_zone' },
+        'categorie_support': { table: 'Categorie_Support', col: 'nom' },
+        'type_support': { table: 'Type_Support', col: 'nom' },
+        'type_etat_support': { table: 'Type_Etat_Support', col: 'nom_etat' }
+      });
+
       const findOrCreateRef = async (table, colName, value) => {
+        const lowerTable = String(table || '').toLowerCase().trim();
+        const mapping = ALLOWED_REF_MAPPINGS[lowerTable];
+        if (!mapping || mapping.col.toLowerCase() !== String(colName || '').toLowerCase().trim()) {
+          throw new Error(`Accès SQL non autorisé : table "${table}" ou colonne "${colName}" non répertoriée.`);
+        }
+        const valClean = String(value || '').trim();
+        if (!valClean) {
+          throw new Error(`Valeur obligatoire manquante pour la table de référence "${mapping.table}".`);
+        }
         const existing = await clientDb.query(
-          `SELECT id FROM ${table} WHERE LOWER(${colName}) = LOWER($1) LIMIT 1`,
-          [value]
+          `SELECT id FROM ${mapping.table} WHERE LOWER(${mapping.col}) = LOWER($1) LIMIT 1`,
+          [valClean]
         );
         if (existing.rows.length > 0) {
           return existing.rows[0].id;
         }
         const inserted = await clientDb.query(
-          `INSERT INTO ${table} (${colName}) VALUES ($1) RETURNING id`,
-          [value]
+          `INSERT INTO ${mapping.table} (${mapping.col}) VALUES ($1) RETURNING id`,
+          [valClean]
         );
         return inserted.rows[0].id;
       };
@@ -497,8 +515,8 @@ class CsvService {
           await clientDb.query(`
             SELECT setval(
               pg_get_serial_sequence('${tbl}', 'id'),
-              COALESCE((SELECT MAX(id) FROM "${tbl}"), 1),
-              (SELECT MAX(id) FROM "${tbl}") IS NOT NULL
+              COALESCE((SELECT MAX(id) FROM ${tbl}), 1),
+              (SELECT MAX(id) FROM ${tbl}) IS NOT NULL
             )
           `);
         } catch (seqErr) {
@@ -711,8 +729,8 @@ class CsvService {
           await clientDb.query(`
             SELECT setval(
               pg_get_serial_sequence('${tbl}', 'id'),
-              COALESCE((SELECT MAX(id) FROM "${tbl}"), 1),
-              (SELECT MAX(id) FROM "${tbl}") IS NOT NULL
+              COALESCE((SELECT MAX(id) FROM ${tbl}), 1),
+              (SELECT MAX(id) FROM ${tbl}) IS NOT NULL
             )
           `);
         } catch (seqErr) {

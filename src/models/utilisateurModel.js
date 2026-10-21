@@ -102,7 +102,7 @@ class UtilisateurModel {
   }
 
   static async getAllRoles() {
-    const { rows } = await db.query('SELECT * FROM Role ORDER BY id ASC');
+    const { rows } = await db.query('SELECT id, nom_role FROM Role ORDER BY id ASC');
     return rows;
   }
   static async findByEmail(email) {

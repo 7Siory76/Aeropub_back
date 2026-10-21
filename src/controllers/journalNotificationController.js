@@ -38,7 +38,7 @@ class JournalNotificationController {
     static async markAllAsRead(req, res) {
         try {
             await JournalNotificationModel.markAllAsRead();
-            return res.status(200).json({ status: 'success', message: 'Toutes les notifications sont marquées comme lues' });
+            return res.status(200).json({ status: 'success', message: 'Toutes les notifications ont été marquées comme lues' });
         } catch (err) {
             return sendError(res, err);
         }

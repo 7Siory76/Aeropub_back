@@ -24,7 +24,47 @@ class SupportModel {
     }
   }
 
-  static async getAll() {
+  static async getAll(filters = {}) {
+    const { limit, offset, search, id_zone, id_categorie, id_type, statut } = filters;
+    const conditions = [];
+    const params = [];
+
+    if (search && String(search).trim() !== '') {
+      params.push(`%${String(search).trim().toLowerCase()}%`);
+      conditions.push(`(
+        LOWER(s.reference) LIKE $${params.length} 
+        OR LOWER(COALESCE(s.caracteristiques, '')) LIKE $${params.length}
+        OR LOWER(COALESCE(zt.nom_zone, '')) LIKE $${params.length}
+      )`);
+    }
+
+    if (id_zone) {
+      params.push(parseInt(id_zone, 10));
+      conditions.push(`s.id_zone = $${params.length}`);
+    }
+
+    if (id_categorie) {
+      params.push(parseInt(id_categorie, 10));
+      conditions.push(`s.id_categorie = $${params.length}`);
+    }
+
+    if (id_type) {
+      params.push(parseInt(id_type, 10));
+      conditions.push(`s.id_type = $${params.length}`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    let paginationClause = '';
+    if (limit !== undefined && !isNaN(Number(limit))) {
+      params.push(parseInt(limit, 10));
+      paginationClause += ` LIMIT $${params.length}`;
+      if (offset !== undefined && !isNaN(Number(offset))) {
+        params.push(parseInt(offset, 10));
+        paginationClause += ` OFFSET $${params.length}`;
+      }
+    }
+
     const query = `
       SELECT 
         s.reference,
@@ -74,10 +114,11 @@ class SupportModel {
         ORDER BY es.id DESC
         LIMIT 1
       ) es ON true
-
+      ${whereClause}
       ORDER BY s.reference ASC
+      ${paginationClause}
     `;
-    const { rows } = await db.query(query);
+    const { rows } = await db.query(query, params);
     return rows;
   }
 
@@ -235,7 +276,7 @@ class SupportModel {
 
     const current = await this.getByReference(reference);
     if (!current) {
-      const error = new Error(`Support avec la référence "${reference}" introuvable.`);
+      const error = new Error(`Support introuvable avec la référence "${reference}".`);
       error.statusCode = 404;
       throw error;
     }
@@ -381,7 +422,16 @@ class SupportModel {
 
   static async getHistoriqueEtats(reference) {
     const query = `
-      SELECT es.*, tes.nom_etat AS etat, u.nom AS nom_utilisateur
+      SELECT 
+        es.id,
+        es.reference_support,
+        es.id_type_etat,
+        es.date_debut,
+        es.date_fin,
+        es.id_utilisateur,
+        es.observation,
+        tes.nom_etat AS etat,
+        u.nom AS nom_utilisateur
       FROM Etat_Support es
       LEFT JOIN Type_Etat_Support tes ON es.id_type_etat = tes.id
       LEFT JOIN Utilisateur u ON es.id_utilisateur = u.id

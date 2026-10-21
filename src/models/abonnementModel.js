@@ -133,10 +133,63 @@ class AbonnementModel {
     }
   }
 
-  static async getAll() {
+  static async getAll(filters = {}) {
+    const { limit, offset, search, statut, id_commercial, date_debut, date_echeance } = filters;
+    const conditions = [];
+    const params = [];
+
+    if (search && String(search).trim() !== '') {
+      params.push(`%${String(search).trim().toLowerCase()}%`);
+      conditions.push(`(
+        LOWER(a.reference) LIKE $${params.length} 
+        OR LOWER(cl.raison_sociale) LIKE $${params.length} 
+        OR LOWER(a.annonceur_campagne) LIKE $${params.length}
+      )`);
+    }
+
+    if (id_commercial) {
+      params.push(parseInt(id_commercial, 10));
+      conditions.push(`a.id_commercial = $${params.length}`);
+    }
+
+    if (date_debut) {
+      params.push(date_debut);
+      conditions.push(`a.date_debut >= $${params.length}`);
+    }
+
+    if (date_echeance) {
+      params.push(date_echeance);
+      conditions.push(`a.date_echeance <= $${params.length}`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    let paginationClause = '';
+    if (limit !== undefined && !isNaN(Number(limit))) {
+      params.push(parseInt(limit, 10));
+      paginationClause += ` LIMIT $${params.length}`;
+      if (offset !== undefined && !isNaN(Number(offset))) {
+        params.push(parseInt(offset, 10));
+        paginationClause += ` OFFSET $${params.length}`;
+      }
+    }
+
     const query = `
       SELECT 
-        a.*,
+        a.reference,
+        a.id_client,
+        a.id_commercial,
+        a.id_abonnement_precedent,
+        a.annonceur_campagne,
+        a.tarif,
+        a.devise,
+        a.periodicite,
+        a.date_debut,
+        a.date_echeance,
+        a.reconduction_tacite,
+        a.preavis_jours,
+        a.motif_non_renouvellement,
+        a.date_creation,
         a.reference AS id,
         cl.raison_sociale,
         cl.raison_sociale AS nom_client,
@@ -171,16 +224,31 @@ class AbonnementModel {
         ORDER BY sa.id DESC
         LIMIT 1
       ) st ON true
+      ${whereClause}
       ORDER BY a.date_creation DESC, a.reference ASC
+      ${paginationClause}
     `;
-    const { rows } = await db.query(query);
+    const { rows } = await db.query(query, params);
     return rows;
   }
 
   static async getById(reference) {
     const query = `
       SELECT 
-        a.*,
+        a.reference,
+        a.id_client,
+        a.id_commercial,
+        a.id_abonnement_precedent,
+        a.annonceur_campagne,
+        a.tarif,
+        a.devise,
+        a.periodicite,
+        a.date_debut,
+        a.date_echeance,
+        a.reconduction_tacite,
+        a.preavis_jours,
+        a.motif_non_renouvellement,
+        a.date_creation,
         a.reference AS id,
         cl.raison_sociale,
         cl.raison_sociale AS nom_client,
@@ -461,7 +529,7 @@ class AbonnementModel {
   }) {
     const currentAbo = await this.getById(reference);
     if (!currentAbo) {
-      const error = new Error(`Abonnement "${reference}" introuvable.`);
+      const error = new Error(`Contrat "${reference}" introuvable.`);
       error.statusCode = 404;
       throw error;
     }
@@ -490,7 +558,7 @@ class AbonnementModel {
 
       if (hasChanged && isLocked) {
         const error = new Error(
-          "L'abonnement est déjà actif (ou archivé) : la modification des supports liés requiert une autorisation de l'administrateur."
+          "Le contrat est déjà actif (ou archivé) : la modification des supports liés requiert une autorisation de l'administrateur."
         );
         error.statusCode = 403;
         throw error;
@@ -769,7 +837,14 @@ class AbonnementModel {
 
   static async getSupportsByAbonnement(reference) {
     const query = `
-      SELECT s.*, ts.nom AS nom_type_support, zt.nom_zone
+      SELECT 
+        s.reference,
+        s.id_zone,
+        s.id_categorie,
+        s.id_type,
+        s.caracteristiques,
+        ts.nom AS nom_type_support,
+        zt.nom_zone
       FROM Abonnement_Support asup
       JOIN Support s ON asup.reference_support = s.reference
       LEFT JOIN Type_Support ts ON s.id_type = ts.id
@@ -782,7 +857,16 @@ class AbonnementModel {
 
   static async getHistoriqueStatuts(reference) {
     const query = `
-      SELECT sa.*, tsa.nom_statut, u.nom AS nom_utilisateur
+      SELECT 
+        sa.id,
+        sa.id_abonnement,
+        sa.id_type_statut,
+        sa.date_debut,
+        sa.date_fin,
+        sa.id_utilisateur,
+        sa.commentaire,
+        tsa.nom_statut,
+        u.nom AS nom_utilisateur
       FROM Statut_Abonnement sa
       LEFT JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
       LEFT JOIN Utilisateur u ON sa.id_utilisateur = u.id

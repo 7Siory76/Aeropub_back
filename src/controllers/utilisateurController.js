@@ -86,7 +86,7 @@ class UtilisateurController {
 
       return res.json({
         status: 'success',
-        message: "connexion réussie",
+        message: "Connexion réussie",
         user: {
           id: user.id,
           nom: user.nom,

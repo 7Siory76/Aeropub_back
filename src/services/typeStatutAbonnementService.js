@@ -8,7 +8,7 @@ class TypeStatutAbonnementService {
   static async getById(id) {
     const typeStatutAbonnement = await TypeStatutAbonnementModel.getById(id);
     if (!typeStatutAbonnement) {
-      const error = new Error(`Type de statut d'abonnement introuvable avec l'ID "${id}".`);
+      const error = new Error(`Statut de contrat introuvable avec l'identifiant "${id}".`);
       error.statusCode = 404;
       throw error;
     }
@@ -17,7 +17,7 @@ class TypeStatutAbonnementService {
 
   static async create(data) {
     if (!data.nom_statut || !String(data.nom_statut).trim()) {
-      const error = new Error('Le nom du statut (nom_statut) est obligatoire.');
+      const error = new Error('Le nom du statut est obligatoire.');
       error.statusCode = 400;
       throw error;
     }
@@ -27,7 +27,7 @@ class TypeStatutAbonnementService {
   static async update(id, data) {
     await this.getById(id);
     if (!data.nom_statut || !String(data.nom_statut).trim()) {
-      const error = new Error('Le nom du statut (nom_statut) est obligatoire.');
+      const error = new Error('Le nom du statut est obligatoire.');
       error.statusCode = 400;
       throw error;
     }

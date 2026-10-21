@@ -112,12 +112,12 @@ class ZoneModel {
 
   // --- Référentiels Aéroports & Périmètres ---
   static async getAllAeroports() {
-    const { rows } = await db.query('SELECT * FROM Aeroport ORDER BY nom ASC');
+    const { rows } = await db.query('SELECT id, nom FROM Aeroport ORDER BY nom ASC');
     return rows;
   }
 
   static async getAllPerimetres() {
-    const { rows } = await db.query('SELECT * FROM Perimetre ORDER BY nom ASC');
+    const { rows } = await db.query('SELECT id, nom FROM Perimetre ORDER BY nom ASC');
     return rows;
   }
 }

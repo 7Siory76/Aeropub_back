@@ -2,12 +2,12 @@ const db = require('../config/db');
 
 class ParametrageModel {
   static async getAll() {
-    const { rows } = await db.query('SELECT * FROM Parametrage ORDER BY id ASC');
+    const { rows } = await db.query('SELECT id, nom_parametre, valeur FROM Parametrage ORDER BY id ASC');
     return rows;
   }
 
   static async getById(id) {
-    const { rows } = await db.query('SELECT * FROM Parametrage WHERE id = $1', [id]);
+    const { rows } = await db.query('SELECT id, nom_parametre, valeur FROM Parametrage WHERE id = $1', [id]);
     return rows[0];
   }
 

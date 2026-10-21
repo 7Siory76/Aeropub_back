@@ -8,7 +8,7 @@ class FormatService {
   static async getById(id) {
     const format = await FormatModel.getById(id);
     if (!format) {
-      const error = new Error(`Format avec l'ID ${id} non trouvé`);
+      const error = new Error(`Format introuvable avec l'identifiant ${id}.`);
       error.statusCode = 404;
       throw error;
     }
@@ -17,7 +17,7 @@ class FormatService {
 
   static async create(data) {
     if (!data.ref_format) {
-      const error = new Error('Le champ ref_format est obligatoire');
+      const error = new Error('La référence du format est obligatoire.');
       error.statusCode = 400;
       throw error;
     }
@@ -27,7 +27,7 @@ class FormatService {
   static async update(id, data) {
     await this.getById(id);
     if (!data.ref_format) {
-      const error = new Error('Le champ ref_format est obligatoire');
+      const error = new Error('La référence du format est obligatoire.');
       error.statusCode = 400;
       throw error;
     }

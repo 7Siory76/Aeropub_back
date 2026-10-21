@@ -4,8 +4,8 @@ const ActionCommercialeModel = require('../models/actionCommercialeModel');
 const JournalNotificationModel = require('../models/journalNotificationModel');
 
 class ActionCommercialeService {
-  static async getAll() {
-    return ActionCommercialeModel.getAll();
+  static async getAll(filters) {
+    return ActionCommercialeModel.getAll(filters);
   }
 
   static async getById(id) {
@@ -54,7 +54,7 @@ class ActionCommercialeService {
     const emailPassword = process.env.EMAIL_PASS || process.env.SMTP_PASS || resPass.rows[0]?.valeur?.trim();
 
     if (!emailPassword) {
-      const error = new Error("Mot de passe email expéditeur non configuré (paramètre 'mail_password' manquant dans Paramétrage).");
+      const error = new Error("Mot de passe de messagerie non configuré (paramètre 'mail_password' manquant dans les paramètres système).");
       error.statusCode = 500;
       throw error;
     }
@@ -109,7 +109,7 @@ class ActionCommercialeService {
     `, [abo.id_client]);
 
     if (contactRes.rows.length === 0) {
-      const error = new Error(`Aucun contact email valide trouvé pour le client "${abo.nom_client || 'Client'}". Veuillez renseigner son email dans la fiche client.`);
+      const error = new Error(`Aucune adresse email valide trouvée pour le client "${abo.nom_client || 'Client'}". Veuillez renseigner son adresse email dans la fiche client.`);
       error.statusCode = 400;
       throw error;
     }
@@ -129,7 +129,7 @@ class ActionCommercialeService {
       ? `${abo.nom_commercial}${abo.email_commercial ? ` (${abo.email_commercial})` : ''}`
       : senderMail;
 
-    // 4. Modèle de courriel dynamique depuis la table Modele_Courriel
+    // Modèle de courriel dynamique depuis la table Modele_Courriel
     let objetMail = `Échéance prochaine de votre contrat publicitaire AEROPUB - ${abo.reference}`;
     let corpsMail = `Bonjour ${destNom},
 
@@ -182,12 +182,12 @@ L'équipe commerciale AEROPUB`;
       });
     } catch (sendErr) {
       console.error('[MAIL MANUEL] Erreur envoi SMTP :', sendErr);
-      const error = new Error(`Échec de la transmission du courriel par SMTP : ${sendErr.message}`);
+      const error = new Error(`Échec de l'envoi du courriel : ${sendErr.message}`);
       error.statusCode = 502;
       throw error;
     }
 
-    // historique 
+    // Enregistrement de l'action commerciale
     const action = await ActionCommercialeModel.create({
       id_abonnement: abo.reference,
       id_client: abo.id_client,
@@ -197,7 +197,7 @@ L'équipe commerciale AEROPUB`;
       statut_envoi_email: statutEnvoi
     });
 
-    // Audit
+    // Enregistrement dans le journal des notifications
     await JournalNotificationModel.logAction({
       id_utilisateur: id_utilisateur || abo.id_commercial || null,
       categorie_action: 'EMAIL_MANUEL_RELANCE',
@@ -212,12 +212,12 @@ L'équipe commerciale AEROPUB`;
         expediteur: senderMail,
         statut: statutEnvoi
       },
-      message_notification: `Email de relance manuelle envoyé à ${destNom} (${destEmail}) pour le contrat ${abo.reference}.`
+      message_notification: `Courriel de relance manuelle envoyé à ${destNom} (${destEmail}) pour le contrat ${abo.reference}.`
     });
 
     return {
       success: true,
-      message: `Courriel de relance envoyé avec succès à ${destEmail} !`,
+      message: `Courriel de relance envoyé avec succès à ${destEmail}.`,
       action,
       destEmail
     };
@@ -245,7 +245,7 @@ L'équipe commerciale AEROPUB`;
     const emailPassword = process.env.EMAIL_PASS || process.env.SMTP_PASS || resPass.rows[0]?.valeur?.trim();
 
     if (!emailPassword) {
-      const error = new Error("Mot de passe email expéditeur non configuré (paramètre 'mail_password' manquant dans Paramétrage).");
+      const error = new Error("Mot de passe de messagerie non configuré (paramètre 'mail_password' manquant dans les paramètres système).");
       error.statusCode = 500;
       throw error;
     }
@@ -296,12 +296,12 @@ L'équipe commerciale AEROPUB`;
     // Vérification : contrat ACTIF uniquement
     const statutClean = String(abo.statut || '').trim().toLowerCase();
     if (statutClean !== 'actif') {
-      const error = new Error(`Le contrat "${reference}" n'est pas actif (statut actuel : "${abo.statut}"). Seuls les contrats actifs peuvent faire l'objet d'un préavis de résiliation/reconduction.`);
+      const error = new Error(`Le contrat "${reference}" n'est pas actif (statut actuel : "${abo.statut}"). Seuls les contrats actifs peuvent faire l'objet d'un préavis de reconduction.`);
       error.statusCode = 400;
       throw error;
     }
 
-    // Vérification : AUCUN renouvellement existant
+    // Vérification : aucun renouvellement existant
     if (abo.a_renouvellement) {
       const error = new Error(`Le contrat "${reference}" a déjà fait l'objet d'un renouvellement. Aucun préavis de résiliation n'est nécessaire.`);
       error.statusCode = 400;
@@ -316,7 +316,7 @@ L'équipe commerciale AEROPUB`;
       throw error;
     }
 
-    // 3. Récupération du contact email du client (table Contact)
+    // 3. Récupération du contact email du client
     const contactRes = await db.query(`
       SELECT nom_contact, valeur, est_principal
       FROM Contact 
@@ -336,7 +336,7 @@ L'équipe commerciale AEROPUB`;
     `, [abo.id_client]);
 
     if (contactRes.rows.length === 0) {
-      const error = new Error(`Aucun contact email valide trouvé pour le client "${abo.nom_client || 'Client'}". Veuillez renseigner son email dans la fiche client.`);
+      const error = new Error(`Aucune adresse email valide trouvée pour le client "${abo.nom_client || 'Client'}". Veuillez renseigner son adresse email dans la fiche client.`);
       error.statusCode = 400;
       throw error;
     }
@@ -367,7 +367,7 @@ L'équipe commerciale AEROPUB`;
     } else if (diffJoursPreavis === 0) {
       texteDelai = `le délai de préavis expire aujourd'hui même (${dateLimitePreavisFr}), et il reste ${diffJoursEcheance} jour(s) avant l'échéance (${dateFr})`;
     } else {
-      texteDelai = `${diffJoursEcheance} jour(s) restant(s) avant l'échéance définitive et le renouvellement automatique (${dateFr}) [Préavis initial de ${preavisJours}j échu le ${dateLimitePreavisFr}]`;
+      texteDelai = `${diffJoursEcheance} jour(s) restant(s) avant l'échéance définitive et le renouvellement automatique (${dateFr}) [Préavis initial de ${preavisJours} jours échu le ${dateLimitePreavisFr}]`;
     }
 
     // 4. Modèle de courriel dynamique depuis Modele_Courriel ('PREAVIS_RECONDUCTION')
@@ -381,7 +381,7 @@ Conformément à la clause de reconduction tacite et au préavis contractuel de 
 Délai restant : ${texteDelai}.
 
 - Si vous souhaitez poursuivre votre collaboration et renouveler ce contrat, vous n'avez aucune démarche à entreprendre.
-- Si vous souhaitez résilier votre contrat à son terme sans reconduction, nous vous remercions de bien vouloir nous en notifier par retour de ce courriel avant le ${dateLimitePreavisFr}.
+- Si vous souhaitez résilier votre contrat à son terme sans reconduction, nous vous remercions de bien vouloir nous en faire part par retour de ce courriel avant le ${dateLimitePreavisFr}.
 
 Votre interlocuteur commercial AEROPUB (${interlocuteurStr}) se tient à votre entière disposition pour tout renseignement.
 
@@ -442,15 +442,15 @@ L'équipe commerciale AEROPUB`;
       });
     } catch (sendErr) {
       console.error('[PREAVIS RECONDUCTION] Erreur envoi SMTP :', sendErr);
-      const error = new Error(`Échec de la transmission du courriel par SMTP : ${sendErr.message}`);
+      const error = new Error(`Échec de l'envoi du courriel : ${sendErr.message}`);
       error.statusCode = 502;
       throw error;
     }
 
-    // 6. Enregistrement dans Action_Commerciale
+    // 6. Enregistrement de l'action commerciale
     const isRattrapage = diffJoursPreavis < 0;
     const prefixRattrapage = isRattrapage ? '[Rattrapage] ' : '';
-    const descAction = `${prefixRattrapage}Courriel de préavis de reconduction tacite envoyé à ${destNom} (${destEmail}) pour le contrat ${abo.reference}. ${texteDelai}. Statut: ${statutEnvoi}.`;
+    const descAction = `${prefixRattrapage}Courriel de préavis de reconduction tacite envoyé à ${destNom} (${destEmail}) pour le contrat ${abo.reference}. ${texteDelai}. Statut : ${statutEnvoi}.`;
 
     const action = await ActionCommercialeModel.create({
       id_abonnement: abo.reference,
@@ -461,7 +461,7 @@ L'équipe commerciale AEROPUB`;
       statut_envoi_email: statutEnvoi
     });
 
-    // 7. Audit & Historique dans Journal_Notification
+    // 7. Enregistrement dans le journal des notifications
     await JournalNotificationModel.logAction({
       id_utilisateur: id_utilisateur || abo.id_commercial || null,
       categorie_action: 'PREAVIS_RECONDUCTION',
@@ -481,12 +481,12 @@ L'équipe commerciale AEROPUB`;
         expediteur: senderMail,
         statut: statutEnvoi
       },
-      message_notification: `${prefixRattrapage}Email de préavis de reconduction tacite envoyé à ${destNom} (${destEmail}) pour le contrat ${abo.reference} (${texteDelai}).`
+      message_notification: `${prefixRattrapage}Courriel de préavis de reconduction tacite envoyé à ${destNom} (${destEmail}) pour le contrat ${abo.reference} (${texteDelai}).`
     });
 
     return {
       success: true,
-      message: `Courriel de préavis de reconduction envoyé avec succès à ${destEmail} !`,
+      message: `Courriel de préavis de reconduction envoyé avec succès à ${destEmail}.`,
       action,
       destEmail,
       dateLimitePreavisFr

@@ -3,11 +3,36 @@
  * Traduit les erreurs techniques (PostgreSQL, validations, etc.) en messages clairs et précis pour l'utilisateur.
  */
 
+function sanitizeForLogging(err) {
+  if (!err) return err;
+  const msg = err.stack || err.message || String(err);
+  // Masquer les mots de passe et les chaînes de connexion dans les logs
+  return msg
+    .replace(/(postgres(?:ql)?:\/\/[^:]+:)([^@]+)(@)/gi, '$1*****$3')
+    .replace(/(password|passwd|mot_de_passe|secret|token)\s*[:=]\s*['"]?[^'",\s]+['"]?/gi, '$1=*****');
+}
+
 function normalizeBackendError(error) {
-  let statusCode = error.statusCode || 500;
+  let statusCode = error.statusCode || error.status || 500;
   let message = error.message || "Une erreur inattendue est survenue.";
 
-  // 1. Erreurs PostgreSQL avec code standard SQLSTATE
+  // 1. Erreur de syntaxe JSON (ex: corps de requête malformé capturé par express.json)
+  if (error instanceof SyntaxError && (statusCode === 400 || error.status === 400) && 'body' in error) {
+    return {
+      statusCode: 400,
+      message: "Format JSON de la requête invalide."
+    };
+  }
+
+  // 2. Erreurs de téléversement Multer
+  if (error && error.name === 'MulterError') {
+    return {
+      statusCode: 400,
+      message: `Erreur de téléversement : ${error.message}`
+    };
+  }
+
+  // 3. Erreurs PostgreSQL avec code standard SQLSTATE
   if (error.code) {
     switch (error.code) {
       case '23505': { // Unique violation
@@ -83,15 +108,17 @@ function normalizeBackendError(error) {
         break;
       }
 
-      case 'ECONNREFUSED': {
+      case 'ECONNREFUSED':
+      case '08001':
+      case '08006': {
         statusCode = 503;
-        message = "Connexion impossible au serveur de base de données PostgreSQL.";
+        message = "Le service de base de données est temporairement indisponible. Veuillez réessayer ultérieurement.";
         break;
       }
     }
   }
 
-  // 2. Détection par libellé texte brut (si le message de la DB est remonté en français ou anglais)
+  // 4. Détection par libellé texte brut (si le message de la DB est remonté en français ou anglais)
   const lowerMsg = String(message || '').toLowerCase();
   if (
     lowerMsg.includes('contrainte unique') ||
@@ -111,13 +138,19 @@ function normalizeBackendError(error) {
     }
   }
 
+  // 5. En production, masquer tout message d'erreur interne (500) pour éviter les fuites d'informations
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (statusCode >= 500 && isProduction) {
+    message = "Une erreur interne est survenue sur le serveur. Veuillez réessayer ultérieurement.";
+  }
+
   return { statusCode, message };
 }
 
 function sendError(res, error) {
   const { statusCode, message } = normalizeBackendError(error);
   if (statusCode >= 500) {
-    console.error('❌ [API ERROR 500]:', error);
+    console.error('❌ [API ERROR 500]:', sanitizeForLogging(error));
   }
   return res.status(statusCode).json({
     status: 'error',
@@ -127,5 +160,6 @@ function sendError(res, error) {
 
 module.exports = {
   normalizeBackendError,
-  sendError
+  sendError,
+  sanitizeForLogging
 };

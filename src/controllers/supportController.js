@@ -4,7 +4,7 @@ const { sendError } = require('../utils/errorHandler');
 class SupportController {
   static async getAll(req, res) {
     try {
-      const listeSupports = await SupportService.getAll();
+      const listeSupports = await SupportService.getAll(req.query);
       return res.status(200).json({ status: 'success', count: listeSupports.length, data: listeSupports });
     } catch (error) {
       return sendError(res, error);

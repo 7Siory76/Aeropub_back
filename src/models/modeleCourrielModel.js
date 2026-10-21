@@ -47,21 +47,29 @@ class ModeleCourrielModel {
 
   static async getAll() {
     await this.seedDefaults();
-    const { rows } = await db.query('SELECT * FROM Modele_Courriel ORDER BY id ASC');
+    const { rows } = await db.query(
+      'SELECT id, code, nom, sujet, corps, date_modification FROM Modele_Courriel ORDER BY id ASC'
+    );
     return rows;
   }
 
   static async getByCode(code) {
-    let { rows } = await db.query('SELECT * FROM Modele_Courriel WHERE code = $1', [code]);
+    let { rows } = await db.query(
+      'SELECT id, code, nom, sujet, corps, date_modification FROM Modele_Courriel WHERE code = $1',
+      [code]
+    );
     if (rows.length === 0 && DEFAULT_TEMPLATES[code]) {
       const tpl = DEFAULT_TEMPLATES[code];
       const insertRes = await db.query(`
         INSERT INTO Modele_Courriel (code, nom, sujet, corps)
         VALUES ($1, $2, $3, $4)
         ON CONFLICT (code) DO NOTHING
-        RETURNING *
+        RETURNING id, code, nom, sujet, corps, date_modification
       `, [code, tpl.nom, tpl.sujet, tpl.corps]);
-      return insertRes.rows[0] || (await db.query('SELECT * FROM Modele_Courriel WHERE code = $1', [code])).rows[0] || null;
+      return insertRes.rows[0] || (await db.query(
+        'SELECT id, code, nom, sujet, corps, date_modification FROM Modele_Courriel WHERE code = $1',
+        [code]
+      )).rows[0] || null;
     }
     return rows[0] || null;
   }

@@ -14,7 +14,7 @@ class CsvController {
 
       return res.status(200).json({
         status: 'success',
-        message: 'Importation CSV réussie !',
+        message: 'Importation CSV réussie.',
         data: result
       });
 
@@ -26,12 +26,12 @@ class CsvController {
   static async importInfrastructure(req, res) {
     try {
       if (!req.file) {
-        return res.status(400).json({ status: 'error', message: 'Aucun fichier CSV téléversé. ' });
+        return res.status(400).json({ status: 'error', message: 'Aucun fichier CSV téléversé.' });
       }
       const rapport = await CsvService.processInfrastructureCsv(req.file.path);
       return res.status(200).json({ status: 'success', data: rapport });
     } catch (error) {
-      return res.status(400).json({ status: 'error', message: error.message });
+      return sendError(res, error);
     }
   }
 
@@ -43,7 +43,7 @@ class CsvController {
       const rapport = await CsvService.processClientCsv(req.file.path);
       return res.status(200).json({ status: 'success', data: rapport });
     } catch (error) {
-      return res.status(400).json({ status: 'error', message: error.message });
+      return sendError(res, error);
     }
   }
 
@@ -55,7 +55,7 @@ class CsvController {
       const rapport = await CsvService.processAbonnementCsv(req.file.path);
       return res.status(200).json({ status: 'success', data: rapport });
     } catch (error) {
-      return res.status(400).json({ status: 'error', message: error.message });
+      return sendError(res, error);
     }
   }
 

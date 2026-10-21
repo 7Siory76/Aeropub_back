@@ -4,7 +4,7 @@ const { sendError } = require('../utils/errorHandler');
 class ClientController {
   static async getAll(req, res) {
     try {
-      const listeClients = await ClientService.getAll();
+      const listeClients = await ClientService.getAll(req.query);
       return res.status(200).json({ status: 'success', count: listeClients.length, data: listeClients });
     } catch (error) {
       return sendError(res, error);

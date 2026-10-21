@@ -23,7 +23,7 @@ class TypeSupportController {
   static async create(req, res) {
     try {
       const data = await TypeSupportService.create(req.body);
-      return res.status(201).json({ status: 'success', message: 'TypeSupport créé avec succès', data });
+      return res.status(201).json({ status: 'success', message: 'Type de support créé avec succès', data });
     } catch (error) {
       return sendError(res, error);
     }
@@ -32,7 +32,7 @@ class TypeSupportController {
   static async update(req, res) {
     try {
       const data = await TypeSupportService.update(req.params.id, req.body);
-      return res.status(200).json({ status: 'success', message: 'TypeSupport mis à jour avec succès', data });
+      return res.status(200).json({ status: 'success', message: 'Type de support mis à jour avec succès', data });
     } catch (error) {
       return sendError(res, error);
     }
@@ -41,7 +41,7 @@ class TypeSupportController {
   static async delete(req, res) {
     try {
       const data = await TypeSupportService.delete(req.params.id);
-      return res.status(200).json({ status: 'success', message: 'TypeSupport supprimé avec succès', data });
+      return res.status(200).json({ status: 'success', message: 'Type de support supprimé avec succès', data });
     } catch (error) {
       return sendError(res, error);
     }

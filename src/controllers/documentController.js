@@ -4,7 +4,7 @@ const { sendError } = require('../utils/errorHandler');
 class DocumentController {
   static async getAll(req, res) {
     try {
-      const data = await DocumentService.getAll();
+      const data = await DocumentService.getAll(req.query);
       return res.status(200).json({ status: 'success', count: data.length, data });
     } catch (error) {
       return sendError(res, error);
@@ -29,7 +29,7 @@ class DocumentController {
     }
   }
 
-  // Upload d'un fichier via Multer
+  // Téléversement d'un fichier via Multer
   static async upload(req, res) {
     try {
       if (!req.file) {
@@ -50,7 +50,7 @@ class DocumentController {
         type_document: type_document || 'Contrat'
       });
 
-      return res.status(201).json({ status: 'success', message: 'Document uploadé avec succès', data });
+      return res.status(201).json({ status: 'success', message: 'Document téléversé avec succès', data });
     } catch (error) {
       return sendError(res, error);
     }

@@ -1,8 +1,8 @@
 const ClientModel = require('../models/clientModel');
 
 class ClientService {
-  static async getAll() {
-    return ClientModel.getAll();
+  static async getAll(filters) {
+    return ClientModel.getAll(filters);
   }
 
   static async getById(id) {

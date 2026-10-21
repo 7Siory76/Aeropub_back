@@ -8,7 +8,7 @@ class ParametrageService {
   static async getById(id) {
     const parametrage = await ParametrageModel.getById(id);
     if (!parametrage) {
-      const error = new Error(`Paramétrage avec l'ID ${id} non trouvé`);
+      const error = new Error(`Paramètre introuvable avec l'identifiant ${id}.`);
       error.statusCode = 404;
       throw error;
     }
@@ -17,7 +17,7 @@ class ParametrageService {
 
   static async create(data) {
     if (!data.nom_parametre) {
-      const error = new Error('Le champ nom_parametre est obligatoire');
+      const error = new Error('Le nom du paramètre est obligatoire.');
       error.statusCode = 400;
       throw error;
     }
@@ -27,7 +27,7 @@ class ParametrageService {
   static async update(id, data) {
     await this.getById(id);
     if (!data.valeur) {
-      const error = new Error('Le champ valeur est obligatoire');
+      const error = new Error('La valeur du paramètre est obligatoire.');
       error.statusCode = 400;
       throw error;
     }

@@ -43,9 +43,18 @@ class JournalNotificationModel {
     }
     static async getAll({ categorie = null, nonLuSeulement = false, limit = 500 } = {}) {
         let querry = `
-        SELECT jn.*,
-        u.nom AS nom_utilisateur,
-        u.email AS email_utilisateur
+        SELECT 
+            jn.id,
+            jn.id_utilisateur,
+            jn.categorie_action,
+            jn.entite_concernee,
+            jn.reference_entite,
+            jn.valeur_apres,
+            jn.message_notification,
+            jn.date_action,
+            jn.lu_par_admin,
+            u.nom AS nom_utilisateur,
+            u.email AS email_utilisateur
         FROM Journal_Notification jn
         LEFT JOIN Utilisateur u ON jn.id_utilisateur = u.id
         WHERE 1=1

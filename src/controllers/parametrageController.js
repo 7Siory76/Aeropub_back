@@ -23,7 +23,7 @@ class ParametrageController {
   static async create(req, res) {
     try {
       const data = await ParametrageService.create(req.body);
-      return res.status(201).json({ status: 'success', message: 'Paramétrage créé avec succès', data });
+      return res.status(201).json({ status: 'success', message: 'Paramètre créé avec succès', data });
     } catch (error) {
       return sendError(res, error);
     }
@@ -32,7 +32,7 @@ class ParametrageController {
   static async update(req, res) {
     try {
       const data = await ParametrageService.update(req.params.id, req.body);
-      return res.status(200).json({ status: 'success', message: 'Paramétrage mis à jour avec succès', data });
+      return res.status(200).json({ status: 'success', message: 'Paramètre mis à jour avec succès', data });
     } catch (error) {
       return sendError(res, error);
     }
@@ -41,7 +41,7 @@ class ParametrageController {
   static async delete(req, res) {
     try {
       const data = await ParametrageService.delete(req.params.id);
-      return res.status(200).json({ status: 'success', message: 'Paramétrage supprimé avec succès', data });
+      return res.status(200).json({ status: 'success', message: 'Paramètre supprimé avec succès', data });
     } catch (error) {
       return sendError(res, error);
     }

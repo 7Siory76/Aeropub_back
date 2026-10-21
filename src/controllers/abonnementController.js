@@ -4,7 +4,7 @@ const { sendError } = require('../utils/errorHandler');
 class AbonnementController {
   static async getAll(req, res) {
     try {
-      const listeAbonnements = await AbonnementService.getAll();
+      const listeAbonnements = await AbonnementService.getAll(req.query);
       return res.status(200).json({ status: 'success', count: listeAbonnements.length, data: listeAbonnements });
     } catch (error) {
       return sendError(res, error);

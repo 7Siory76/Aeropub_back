@@ -1,14 +1,14 @@
 const SupportModel = require('../models/supportModel');
 
 class SupportService {
-  static async getAll() {
-    return SupportModel.getAll();
+  static async getAll(filters) {
+    return SupportModel.getAll(filters);
   }
 
   static async getByReference(reference) {
     const support = await SupportModel.getByReference(reference);
     if (!support) {
-      const error = new Error(`Support avec la référence "${reference}" introuvable.`);
+      const error = new Error(`Support introuvable avec la référence "${reference}".`);
       error.statusCode = 404;
       throw error;
     }

@@ -23,6 +23,7 @@ const journalRoutes = require('./src/routes/journalNotificationRoutes');
 const modeleCourrielRoutes = require('./src/routes/modeleCourrielRoutes');
 const ZoneController = require('./src/controllers/zoneController');
 const { initAbonnementCron } = require('./src/services/cronService');
+const { sendError } = require('./src/utils/errorHandler');
 const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -73,18 +74,34 @@ app.use((req, res) => {
   });
 });
 
-// 4. Initialisation de la Base de Données et Démarrage du Serveur
+// 4. Gestionnaire global des erreurs non capturées (JSON malformé, Multer, exceptions middleware)
+app.use((err, req, res, next) => {
+  sendError(res, err);
+});
+
+// 5. Initialisation de la Base de Données et Démarrage du Serveur
+const validateRequiredEnv = () => {
+  const required = ['DATABASE_URL'];
+  const missing = required.filter(key => !process.env[key] || !process.env[key].trim());
+
+  if (missing.length > 0) {
+    console.error(`❌ ERREUR DE CONFIGURATION : Variable(s) indispensable(s) manquante(s) dans .env : [${missing.join(', ')}].`);
+    console.error(`ℹ️ Veuillez renseigner ces variables en vous basant sur le fichier .env.example.`);
+    return false;
+  }
+  return true;
+};
+
 const startServer = async () => {
   try {
-    if (process.env.DATABASE_URL) {
+    const isConfigValid = validateRequiredEnv();
+    if (isConfigValid && process.env.DATABASE_URL) {
       try {
         await initDatabase();
         console.log('✅ Tables PostgreSQL AeroPub base_v3.sql initialisées avec succès.');
       } catch (dbInitErr) {
         console.warn('⚠️ Avertissement lors de l\'initialisation des tables:', dbInitErr.message);
       }
-    } else {
-      console.warn('⚠️ DATABASE_URL manquant dans le fichier .env.');
     }
 
     app.listen(PORT, () => {
@@ -99,5 +116,8 @@ const startServer = async () => {
   }
 };
 
+if (require.main === module) {
+  startServer();
+}
 
-startServer();
+module.exports = { app, startServer, validateRequiredEnv };

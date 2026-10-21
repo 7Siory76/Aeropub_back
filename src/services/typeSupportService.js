@@ -8,7 +8,7 @@ class TypeSupportService {
   static async getById(id) {
     const typeSupport = await TypeSupportModel.getById(id);
     if (!typeSupport) {
-      const error = new Error(`TypeSupport avec l'ID ${id} non trouvé`);
+      const error = new Error(`Type de support introuvable avec l'identifiant ${id}.`);
       error.statusCode = 404;
       throw error;
     }
@@ -17,7 +17,7 @@ class TypeSupportService {
 
   static async create(data) {
     if (!data.nom_type) {
-      const error = new Error('Le champ nom_type est obligatoire');
+      const error = new Error('Le nom du type de support est obligatoire.');
       error.statusCode = 400;
       throw error;
     }
@@ -27,7 +27,7 @@ class TypeSupportService {
   static async update(id, data) {
     await this.getById(id);
     if (!data.nom_type) {
-      const error = new Error('Le champ nom_type est obligatoire');
+      const error = new Error('Le nom du type de support est obligatoire.');
       error.statusCode = 400;
       throw error;
     }
