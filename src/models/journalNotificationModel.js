@@ -107,6 +107,19 @@ class JournalNotificationModel {
         const { rows } = await db.query('DELETE FROM Journal_Notification WHERE id = $1 RETURNING *;', [id]);
         return rows[0];
     }
+
+    /**
+    * Récupérer la liste des catégories d'action distinctes enregistrées dans le journal
+    */
+    static async getCategories() {
+        const { rows } = await db.query(`
+            SELECT DISTINCT categorie_action
+            FROM Journal_Notification
+            WHERE categorie_action IS NOT NULL AND TRIM(categorie_action) != ''
+            ORDER BY categorie_action ASC;
+        `);
+        return rows.map(r => r.categorie_action);
+    }
 }
 
 module.exports = JournalNotificationModel;

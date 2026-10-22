@@ -4,6 +4,7 @@ const Controller = require('../controllers/journalNotificationController')
 
 router.get('/', Controller.getNotifications);
 router.get('/unread-count', Controller.getUnreadCount);
+router.get('/categories', Controller.getCategories);
 router.post('/', Controller.create);
 router.put('/mark-all-read', Controller.markAllAsRead);
 router.put('/:id/read', Controller.markAsRead);

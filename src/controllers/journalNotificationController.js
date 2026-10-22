@@ -26,6 +26,15 @@ class JournalNotificationController {
         }
     }
 
+    static async getCategories(req, res) {
+        try {
+            const categories = await JournalNotificationModel.getCategories();
+            return res.status(200).json({ status: 'success', data: categories });
+        } catch (err) {
+            return sendError(res, err);
+        }
+    }
+
     static async markAsRead(req, res) {
         try {
             const updated = await JournalNotificationModel.markAsRead(req.params.id);
