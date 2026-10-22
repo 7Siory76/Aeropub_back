@@ -109,7 +109,7 @@ async function initDatabase() {
         id_commercial INT NOT NULL REFERENCES Utilisateur(id),
         id_abonnement_precedent VARCHAR(50) REFERENCES Abonnement(reference),
         annonceur_campagne VARCHAR(150),
-        tarif NUMERIC(15, 2) NOT NULL,
+        tarif NUMERIC(15, 2) NOT NULL CHECK (tarif >= 0),
         devise VARCHAR(10) DEFAULT 'MGA',
         periodicite VARCHAR(50), 
         date_debut TIMESTAMP NOT NULL,
@@ -302,6 +302,20 @@ async function initDatabase() {
   } catch {
     // Ignorer si l'utilisateur DB n'est pas propriétaire de la table
   }
+
+  try {
+    await db.query(`
+      DO $$ BEGIN
+        ALTER TABLE Abonnement ADD CONSTRAINT check_tarif_positif CHECK (tarif >= 0);
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+        WHEN others THEN NULL;
+      END $$;
+    `);
+  } catch {
+    // Ignorer si les droits DDL sont restreints
+  }
+
   return result;
 }
 

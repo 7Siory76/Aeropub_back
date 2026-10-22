@@ -356,6 +356,28 @@ class AbonnementModel {
     reference_emplacement,
     supports = []
   }) {
+    if (!id_client) {
+      const error = new Error('Le client est requis pour créer un contrat.');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (tarif !== undefined && tarif !== null && tarif !== '') {
+      const parsedTarif = parseFloat(tarif);
+      if (isNaN(parsedTarif) || parsedTarif < 0) {
+        const error = new Error('Le montant du tarif ne peut pas être négatif.');
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+    if (preavis_jours !== undefined && preavis_jours !== null && preavis_jours !== '') {
+      const parsedPreavis = parseInt(preavis_jours, 10);
+      if (isNaN(parsedPreavis) || parsedPreavis < 0) {
+        const error = new Error('Le délai de préavis ne peut pas être négatif.');
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+
     let finalRef = reference && String(reference).trim().length > 0 ? String(reference).trim() : null;
     if (!finalRef) {
       const year = new Date().getFullYear();
@@ -381,7 +403,7 @@ class AbonnementModel {
 
     const finalClient = parseInt(id_client, 10);
     const finalCommercial = id_commercial ? parseInt(id_commercial, 10) : 1;
-    const finalTarif = parseFloat(tarif) || 0;
+    const finalTarif = Math.max(0, parseFloat(tarif) || 0);
     const finalDateDebut = date_debut || new Date();
     const finalDateEcheance = date_echeance || date_fin || new Date();
 
@@ -527,6 +549,24 @@ class AbonnementModel {
     reference_emplacement,
     supports
   }) {
+    if (tarif !== undefined && tarif !== null && tarif !== '') {
+      const parsedTarif = parseFloat(tarif);
+      if (isNaN(parsedTarif) || parsedTarif < 0) {
+        const error = new Error('Le montant du tarif ne peut pas être négatif.');
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+
+    if (preavis_jours !== undefined && preavis_jours !== null && preavis_jours !== '') {
+      const parsedPreavis = parseInt(preavis_jours, 10);
+      if (isNaN(parsedPreavis) || parsedPreavis < 0) {
+        const error = new Error('Le délai de préavis ne peut pas être négatif.');
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+
     const currentAbo = await this.getById(reference);
     if (!currentAbo) {
       const error = new Error(`Contrat "${reference}" introuvable.`);
@@ -785,6 +825,11 @@ class AbonnementModel {
 
   static async delete(reference) {
     const current = await this.getById(reference);
+    if (!current) {
+      const error = new Error(`Contrat "${reference}" introuvable.`);
+      error.statusCode = 404;
+      throw error;
+    }
 
     // Récupérer et libérer tous les supports liés
     const supportsRows = await db.query(

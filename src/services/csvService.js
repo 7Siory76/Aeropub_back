@@ -768,7 +768,7 @@ class CsvService {
           }
           const tarifClean = parseFloat(String(tarifRaw || '0').replace(/[\s\u00A0A-Za-z€$Ar]/g, '').replace(',', '.'));
           if (isNaN(tarifClean) || tarifClean < 0) {
-            throw new Error(`Le montant du tarif '${tarifRaw}' est invalide.`);
+            throw new Error(`Le montant du tarif '${tarifRaw}' ne peut pas être négatif.`);
           }
           const refUpper = refAbo.toUpperCase();
 

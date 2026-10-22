@@ -16,21 +16,14 @@ class AbonnementService {
   }
 
   static async create(data) {
-    if (!data.id_client) {
-      const error = new Error('Le client est requis pour créer un contrat.');
-      error.statusCode = 400;
-      throw error;
-    }
     return AbonnementModel.create(data);
   }
 
   static async update(id, data) {
-    await this.getById(id);
     return AbonnementModel.update(id, data);
   }
 
   static async delete(id) {
-    await this.getById(id);
     return AbonnementModel.delete(id);
   }
 
