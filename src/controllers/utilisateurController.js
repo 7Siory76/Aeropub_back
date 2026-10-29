@@ -1,6 +1,8 @@
 const UtilisateurService = require('../services/utilisateurService');
 const UtilisateurModel = require('../models/utilisateurModel');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { JWT_SECRET } = require('../middlewares/authMiddleware');
 const { sendError } = require('../utils/errorHandler');
 
 class UtilisateurController {
@@ -84,9 +86,22 @@ class UtilisateurController {
 
       delete user.mot_de_passe_hash;
 
+      // Génération du Token JWT (badge numérique chiffré valable 24h)
+      const token = jwt.sign(
+        {
+          id: user.id,
+          nom: user.nom,
+          email: user.email,
+          role: user.role
+        },
+        JWT_SECRET,
+        { expiresIn: '24h' }
+      );
+
       return res.json({
         status: 'success',
         message: "Connexion réussie",
+        token,
         user: {
           id: user.id,
           nom: user.nom,

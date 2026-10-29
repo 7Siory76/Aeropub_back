@@ -24,6 +24,7 @@ const modeleCourrielRoutes = require('./src/routes/modeleCourrielRoutes');
 const ZoneController = require('./src/controllers/zoneController');
 const { initAbonnementCron } = require('./src/services/cronService');
 const { sendError } = require('./src/utils/errorHandler');
+const { authMiddleware } = require('./src/middlewares/authMiddleware');
 const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -33,31 +34,11 @@ app.use(cors()); // Autorise les requêtes Cross-Origin
 app.use(express.json()); // Parsing des corps de requêtes JSON
 app.use(express.urlencoded({ extended: true }));
 
+// Fichiers statiques publics (Pièces jointes et justificatifs)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-// 2. Définition des Routes API
-app.use('/api/csv', csvRoutes);
-app.use('/api/zones', zoneRoutes);
-app.get('/api/aeroports', ZoneController.getAllAeroports);
-app.get('/api/perimetres', ZoneController.getAllPerimetres);
-app.use('/api/clients', clientRoutes);
-app.use('/api/localisations', localisationRoutes);
-app.use('/api/categories', categorieRoutes);
-app.use('/api/formats', formatRoutes);
-app.use('/api/typesupports', typeSupportRoutes);
-app.use('/api/supports', supportRoutes);
-app.use('/api/emplacements', emplacementRoutes); // Alias rétro-compatible
-app.use('/api/publicites', emplacementRoutes); // Alias rétro-compatible
-app.use('/api/abonnements', abonnementRoutes);
-app.use('/api/utilisateurs', utilisateurRoutes);
-app.use('/api/actions-commerciales', actionCommercialeRoutes);
-app.use('/api/documents', documentRoutes);
-app.use('/api/parametrages', parametrageRoutes);
-app.use('/api/types-etats-supports', typeEtatSupportRoutes);
-app.use('/api/types-statuts-abonnements', typeStatutAbonnementRoutes);
-app.use('/api/notifications', journalRoutes);
-app.use('/api/modeles-courriels', modeleCourrielRoutes);
 
-// Route de santé (Health check)
+// 2. Définition des Routes API
+// 2.1 Route de santé publique (Health check pour Koyeb / monitoring)
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     status: 'ok',
@@ -65,6 +46,31 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// 2.2 Routes utilisateurs (Route /login publique, les autres protégées par authMiddleware)
+app.use('/api/utilisateurs', utilisateurRoutes);
+
+// 2.3 Routes Métier PROTÉGÉES par Token JWT (Rejette avec 401 si aucun Token valide n'est fourni)
+app.use('/api/csv', authMiddleware, csvRoutes);
+app.use('/api/zones', authMiddleware, zoneRoutes);
+app.get('/api/aeroports', authMiddleware, ZoneController.getAllAeroports);
+app.get('/api/perimetres', authMiddleware, ZoneController.getAllPerimetres);
+app.use('/api/clients', authMiddleware, clientRoutes);
+app.use('/api/localisations', authMiddleware, localisationRoutes);
+app.use('/api/categories', authMiddleware, categorieRoutes);
+app.use('/api/formats', authMiddleware, formatRoutes);
+app.use('/api/typesupports', authMiddleware, typeSupportRoutes);
+app.use('/api/supports', authMiddleware, supportRoutes);
+app.use('/api/emplacements', authMiddleware, emplacementRoutes); // Alias rétro-compatible
+app.use('/api/publicites', authMiddleware, emplacementRoutes); // Alias rétro-compatible
+app.use('/api/abonnements', authMiddleware, abonnementRoutes);
+app.use('/api/actions-commerciales', authMiddleware, actionCommercialeRoutes);
+app.use('/api/documents', authMiddleware, documentRoutes);
+app.use('/api/parametrages', authMiddleware, parametrageRoutes);
+app.use('/api/types-etats-supports', authMiddleware, typeEtatSupportRoutes);
+app.use('/api/types-statuts-abonnements', authMiddleware, typeStatutAbonnementRoutes);
+app.use('/api/notifications', authMiddleware, journalRoutes);
+app.use('/api/modeles-courriels', authMiddleware, modeleCourrielRoutes);
 
 // 3. Gestionnaire des erreurs 404 (Route non trouvée)
 app.use((req, res) => {
