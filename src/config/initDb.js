@@ -171,12 +171,24 @@ async function initDatabase() {
     -- 10. MODÈLES DE COURRIELS
     CREATE TABLE IF NOT EXISTS Modele_Courriel (
        id SERIAL PRIMARY KEY,
-       code_modele VARCHAR(50) NOT NULL UNIQUE,
-       titre VARCHAR(100) NOT NULL,
+       code VARCHAR(50) NOT NULL UNIQUE,
+       nom VARCHAR(100) NOT NULL,
        sujet VARCHAR(255) NOT NULL,
        corps TEXT NOT NULL,
-       variables_disponibles TEXT,
        date_modification TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- 11. JOURNALISATION GLOBALE ET NOTIFICATIONS (Zéro Perte & Audit Trail)
+    CREATE TABLE IF NOT EXISTS Journal_Notification (
+       id SERIAL PRIMARY KEY,
+       date_action TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       id_utilisateur INT REFERENCES Utilisateur(id),
+       categorie_action VARCHAR(50) NOT NULL, 
+       entite_concernee VARCHAR(50) NOT NULL,
+       reference_entite VARCHAR(100) NOT NULL, 
+       valeur_apres JSONB, 
+       message_notification TEXT NOT NULL, 
+       lu_par_admin BOOLEAN DEFAULT FALSE
     );
 
     -- Insertion des rôles fondamentaux avec identifiants explicites s'ils n'existent pas
@@ -190,6 +202,70 @@ async function initDatabase() {
     ) AS r(id, nom)
     WHERE NOT EXISTS (
       SELECT 1 FROM Role existing WHERE existing.id = r.id OR existing.nom_role = r.nom
+    );
+
+    -- Insertion des aéroports de référence s'ils n'existent pas
+    INSERT INTO Aeroport (id, nom)
+    SELECT a.id, a.nom FROM (VALUES 
+      (1, 'Ivato'), 
+      (2, 'Nosy Be'), 
+      (3, 'Sainte-Marie'), 
+      (4, 'Tamatave'), 
+      (5, 'Majunga')
+    ) AS a(id, nom)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM Aeroport existing WHERE existing.id = a.id OR LOWER(existing.nom) = LOWER(a.nom)
+    );
+
+    -- Insertion des périmètres de référence s'ils n'existent pas
+    INSERT INTO Perimetre (id, nom)
+    SELECT p.id, p.nom FROM (VALUES 
+      (1, 'National'), 
+      (2, 'International'), 
+      (3, 'Public')
+    ) AS p(id, nom)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM Perimetre existing WHERE existing.id = p.id OR LOWER(existing.nom) = LOWER(p.nom)
+    );
+
+    -- Insertion des catégories de supports s'ils n'existent pas
+    INSERT INTO Categorie_Support (id, nom)
+    SELECT c.id, c.nom FROM (VALUES 
+      (1, 'Statique'), 
+      (2, 'Dynamique'), 
+      (3, 'Outdoor Statique'), 
+      (4, 'Chariots'), 
+      (5, 'Evénementiel')
+    ) AS c(id, nom)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM Categorie_Support existing WHERE existing.id = c.id OR LOWER(existing.nom) = LOWER(c.nom)
+    );
+
+    -- Insertion des types de supports s'ils n'existent pas
+    INSERT INTO Type_Support (id, nom)
+    SELECT t.id, t.nom FROM (VALUES 
+      (1, 'Light box'), 
+      (2, 'Panneau Outdoor 4x3'), 
+      (3, 'Ecran LED 49 pouces'), 
+      (4, 'Chariot Standard'), 
+      (5, 'Bâche murale'), 
+      (6, 'Caisson lumineux')
+    ) AS t(id, nom)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM Type_Support existing WHERE existing.id = t.id OR LOWER(existing.nom) = LOWER(t.nom)
+    );
+
+    -- Insertion des formats courants s'ils n'existent pas
+    INSERT INTO Format (id, ref_format)
+    SELECT f.id, f.ref FROM (VALUES 
+      (1, '4x3'), 
+      (2, '2x2'), 
+      (3, '1.60 x 2.40'), 
+      (4, 'Pack 8 écrans'), 
+      (5, 'Flotte 30')
+    ) AS f(id, ref)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM Format existing WHERE existing.id = f.id OR LOWER(existing.ref_format) = LOWER(f.ref)
     );
 
     -- Insertion des valeurs fixes de statuts avec identifiants explicites s'ils n'existent pas
@@ -222,6 +298,21 @@ async function initDatabase() {
       SELECT 1 FROM Type_Etat_Support existing WHERE existing.id = e.id OR existing.nom_etat = e.nom
     );
 
+    -- Insertion des modèles de courriels par défaut
+    INSERT INTO Modele_Courriel (code, nom, sujet, corps) VALUES 
+    (
+      'RELANCE_ECHEANCE',
+      'Relance préventive d''échéance',
+      'Échéance prochaine de votre contrat publicitaire AEROPUB - {reference}',
+      'Bonjour {destNom},\n\nNous vous informons que votre contrat n° {reference}, relatif au(x) support(s) {supports}, arrivera à échéance dans {diffJours} jour(s), le {dateFr}.\n\nVotre interlocuteur AEROPUB ({interlocuteur}) prendra contact avec vous afin d''étudier son renouvellement.\n\nBien cordialement,\nL''équipe commerciale AEROPUB'
+    ),
+    (
+      'PREAVIS_RECONDUCTION',
+      'Préavis de reconduction tacite',
+      'Préavis de reconduction tacite - Contrat AEROPUB {reference}',
+      'Bonjour {destNom},\n\nNous vous informons que votre contrat publicitaire n° {reference}, relatif au(x) support(s) {supports}, arrivera à son terme le {dateFr}.\n\nConformément à la clause de reconduction tacite et au préavis contractuel de {preavisJours} jours (date limite de résiliation : {dateLimitePreavisFr}), ce contrat sera automatiquement reconduit pour une durée identique, sauf dénonciation écrite expresse de votre part avant cette date limite.\n\nDélai restant : {nbJoursRestants}.\n\n- Si vous souhaitez poursuivre votre collaboration et renouveler ce contrat, vous n''avez aucune démarche à entreprendre.\n- Si vous souhaitez résilier votre contrat à son terme sans reconduction, nous vous remercions de bien vouloir nous en notifier par retour de ce courriel avant le {dateLimitePreavisFr}.\n\nVotre interlocuteur commercial AEROPUB ({interlocuteur}) se tient à votre entière disposition pour tout renseignement.\n\nBien cordialement,\nL''équipe commerciale AEROPUB'
+    ) ON CONFLICT (code) DO NOTHING;
+
     -- Insertion des paramètres indispensables s'ils n'existent pas
     INSERT INTO Parametrage (nom_parametre, valeur)
     VALUES 
@@ -233,9 +324,15 @@ async function initDatabase() {
 
     -- Synchronisation des séquences pour éviter tout conflit de clé primaire
     SELECT setval(pg_get_serial_sequence('role', 'id'), COALESCE((SELECT MAX(id) FROM Role), 1));
+    SELECT setval(pg_get_serial_sequence('aeroport', 'id'), COALESCE((SELECT MAX(id) FROM Aeroport), 1));
+    SELECT setval(pg_get_serial_sequence('perimetre', 'id'), COALESCE((SELECT MAX(id) FROM Perimetre), 1));
+    SELECT setval(pg_get_serial_sequence('categorie_support', 'id'), COALESCE((SELECT MAX(id) FROM Categorie_Support), 1));
+    SELECT setval(pg_get_serial_sequence('type_support', 'id'), COALESCE((SELECT MAX(id) FROM Type_Support), 1));
+    SELECT setval(pg_get_serial_sequence('format', 'id'), COALESCE((SELECT MAX(id) FROM Format), 1));
     SELECT setval(pg_get_serial_sequence('type_statut_abonnement', 'id'), COALESCE((SELECT MAX(id) FROM Type_Statut_Abonnement), 1));
     SELECT setval(pg_get_serial_sequence('type_etat_support', 'id'), COALESCE((SELECT MAX(id) FROM Type_Etat_Support), 1));
     SELECT setval(pg_get_serial_sequence('parametrage', 'id'), COALESCE((SELECT MAX(id) FROM Parametrage), 1));
+    SELECT setval(pg_get_serial_sequence('modele_courriel', 'id'), COALESCE((SELECT MAX(id) FROM Modele_Courriel), 1));
   `;
 
   const result = await db.query(queryText);
@@ -316,6 +413,23 @@ async function initDatabase() {
         ALTER TABLE Abonnement ADD CONSTRAINT check_tarif_positif CHECK (tarif >= 0);
       EXCEPTION
         WHEN duplicate_object THEN NULL;
+        WHEN others THEN NULL;
+      END $$;
+    `);
+  } catch {
+    // Ignorer si les droits DDL sont restreints
+  }
+
+  try {
+    await db.query(`
+      DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'modele_courriel' AND column_name = 'code_modele') THEN
+          ALTER TABLE Modele_Courriel RENAME COLUMN code_modele TO code;
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'modele_courriel' AND column_name = 'titre') THEN
+          ALTER TABLE Modele_Courriel RENAME COLUMN titre TO nom;
+        END IF;
+      EXCEPTION
         WHEN others THEN NULL;
       END $$;
     `);
