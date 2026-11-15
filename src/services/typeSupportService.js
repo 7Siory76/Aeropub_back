@@ -1,0 +1,43 @@
+const TypeSupportModel = require('../models/typeSupportModel');
+
+class TypeSupportService {
+  static async getAll() {
+    return await TypeSupportModel.getAll();
+  }
+
+  static async getById(id) {
+    const typeSupport = await TypeSupportModel.getById(id);
+    if (!typeSupport) {
+      const error = new Error(`Type de support introuvable avec l'identifiant ${id}.`);
+      error.statusCode = 404;
+      throw error;
+    }
+    return typeSupport;
+  }
+
+  static async create(data) {
+    if (!data.nom_type) {
+      const error = new Error('Le nom du type de support est obligatoire.');
+      error.statusCode = 400;
+      throw error;
+    }
+    return await TypeSupportModel.create(data);
+  }
+
+  static async update(id, data) {
+    await this.getById(id);
+    if (!data.nom_type) {
+      const error = new Error('Le nom du type de support est obligatoire.');
+      error.statusCode = 400;
+      throw error;
+    }
+    return await TypeSupportModel.update(id, data);
+  }
+
+  static async delete(id) {
+    await this.getById(id);
+    return await TypeSupportModel.delete(id);
+  }
+}
+
+module.exports = TypeSupportService;

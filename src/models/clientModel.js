@@ -1,0 +1,243 @@
+const db = require('../config/db');
+const JournalNotificationModel = require('./journalNotificationModel');
+
+class ClientModel {
+  static async getAll(filters = {}) {
+    const { limit, offset, search, etat_client } = filters;
+    const conditions = [];
+    const params = [];
+
+    if (search && String(search).trim() !== '') {
+      params.push(`%${String(search).trim().toLowerCase()}%`);
+      conditions.push(`(LOWER(c.raison_sociale) LIKE $${params.length} OR LOWER(COALESCE(c.adresse_postale, '')) LIKE $${params.length})`);
+    }
+
+    if (etat_client) {
+      params.push(String(etat_client).trim());
+      conditions.push(`LOWER(c.etat_client) = LOWER($${params.length})`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    let paginationClause = '';
+    if (limit !== undefined && !isNaN(Number(limit))) {
+      params.push(parseInt(limit, 10));
+      paginationClause += ` LIMIT $${params.length}`;
+      if (offset !== undefined && !isNaN(Number(offset))) {
+        params.push(parseInt(offset, 10));
+        paginationClause += ` OFFSET $${params.length}`;
+      }
+    }
+
+    const query = `
+      SELECT 
+        c.id,
+        c.raison_sociale,
+        c.adresse_postale,
+        c.adresse_facturation,
+        c.etat_client,
+        c.date_creation,
+        c.raison_sociale AS nom_client,
+        COALESCE(ct.contacts_val, 'Aucun contact') AS contact,
+        ct.nom_contact_principal,
+        ct.valeur_contact_principal,
+        COALESCE(ct.total_contacts, 0) AS total_contacts
+      FROM Client c
+      LEFT JOIN LATERAL (
+        SELECT 
+          STRING_AGG(valeur, ', ') AS contacts_val,
+          (ARRAY_AGG(nom_contact ORDER BY est_principal DESC, id ASC))[1] AS nom_contact_principal,
+          (ARRAY_AGG(valeur ORDER BY est_principal DESC, id ASC))[1] AS valeur_contact_principal,
+          COUNT(*) AS total_contacts
+        FROM Contact
+        WHERE id_client = c.id
+      ) ct ON true
+      ${whereClause}
+      ORDER BY c.raison_sociale ASC
+      ${paginationClause}
+    `;
+    const { rows } = await db.query(query, params);
+    return rows;
+  }
+
+  static async getById(id) {
+    const query = `
+      SELECT 
+        c.id,
+        c.raison_sociale,
+        c.adresse_postale,
+        c.adresse_facturation,
+        c.etat_client,
+        c.date_creation,
+        c.raison_sociale AS nom_client,
+        COALESCE(ct.contacts_val, 'Aucun contact') AS contact,
+        ct.nom_contact_principal,
+        ct.valeur_contact_principal
+      FROM Client c
+      LEFT JOIN LATERAL (
+        SELECT 
+          STRING_AGG(valeur, ', ') AS contacts_val,
+          (ARRAY_AGG(nom_contact ORDER BY est_principal DESC, id ASC))[1] AS nom_contact_principal,
+          (ARRAY_AGG(valeur ORDER BY est_principal DESC, id ASC))[1] AS valeur_contact_principal
+        FROM Contact
+        WHERE id_client = c.id
+      ) ct ON true
+      WHERE c.id = $1
+    `;
+    const { rows } = await db.query(query, [id]);
+    return rows[0];
+  }
+
+  static async create({ id, raison_sociale, nom_client, adresse_postale, adresse_facturation, etat_client, contact, nom_contact, contacts }) {
+    const finalNom = raison_sociale || nom_client || 'Nouveau Client';
+    const insertQuery = `
+      INSERT INTO Client (raison_sociale, adresse_postale, adresse_facturation, etat_client)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `;
+    const values = [
+      finalNom,
+      adresse_postale || null,
+      adresse_facturation || null,
+      etat_client || 'Actif'
+    ];
+
+    const { rows } = await db.query(insertQuery, values);
+    const newClient = rows[0];
+
+    // Traitement des contacts multiples ou simple
+    if (Array.isArray(contacts) && contacts.length > 0) {
+      for (const ct of contacts) {
+        if (!ct.valeur && !ct.nom_contact) continue;
+        const cleanNom = (ct.nom_contact || '').replace(/^\[.*?\]\s*/, '').trim();
+        const fallbackNom = (ct.type && ct.type !== 'Autre')
+          ? (ct.type === 'Email' ? 'email' : ct.type.toLowerCase())
+          : (ct.valeur && String(ct.valeur).includes('@') ? 'email' : 'contact');
+        const finalNomContact = cleanNom || fallbackNom;
+        await db.query(`
+          INSERT INTO Contact (id_client, nom_contact, valeur, est_principal)
+          VALUES ($1, $2, $3, $4)
+        `, [newClient.id, finalNomContact, (ct.valeur || '').trim() || 'N/A', Boolean(ct.est_principal)]);
+      }
+    } else if (contact || nom_contact) {
+      const cleanNom = (nom_contact || '').replace(/^\[.*?\]\s*/, '').trim();
+      const fallbackNom = (contact && String(contact).includes('@')) ? 'email' : 'Contact Principal';
+      await db.query(`
+        INSERT INTO Contact (id_client, nom_contact, valeur, est_principal)
+        VALUES ($1, $2, $3, TRUE)
+      `, [newClient.id, cleanNom || fallbackNom, (contact || '').trim() || 'N/A']);
+    }
+
+    const createdClient = await this.getById(newClient.id);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'CREATION',
+      entite_concernee: 'CLIENT',
+      reference_entite: String(newClient.id),
+      valeur_apres: createdClient,
+      message_notification: `Nouveau client "${createdClient.nom_client || createdClient.raison_sociale}" (ID: ${newClient.id}) créé.`
+    });
+
+    return createdClient;
+  }
+
+  static async update(id, { raison_sociale, nom_client, adresse_postale, adresse_facturation, etat_client, contact, nom_contact, contacts }) {
+    const finalNom = raison_sociale || nom_client;
+
+    await db.query(`
+      UPDATE Client
+      SET raison_sociale = COALESCE($1, raison_sociale),
+          adresse_postale = COALESCE($2, adresse_postale),
+          adresse_facturation = COALESCE($3, adresse_facturation),
+          etat_client = COALESCE($4, etat_client)
+      WHERE id = $5
+    `, [
+      finalNom || null,
+      adresse_postale !== undefined ? adresse_postale : null,
+      adresse_facturation !== undefined ? adresse_facturation : null,
+      etat_client || null,
+      id
+    ]);
+
+    if (Array.isArray(contacts)) {
+      // Synchronisation : Remplacer les contacts par la nouvelle liste
+      await db.query('DELETE FROM Contact WHERE id_client = $1', [id]);
+      for (const ct of contacts) {
+        if (!ct.valeur && !ct.nom_contact) continue;
+        const cleanNom = (ct.nom_contact || '').replace(/^\[.*?\]\s*/, '').trim();
+        const fallbackNom = (ct.type && ct.type !== 'Autre')
+          ? (ct.type === 'Email' ? 'email' : ct.type.toLowerCase())
+          : (ct.valeur && String(ct.valeur).includes('@') ? 'email' : 'contact');
+        const finalNomContact = cleanNom || fallbackNom;
+        await db.query(`
+          INSERT INTO Contact (id_client, nom_contact, valeur, est_principal)
+          VALUES ($1, $2, $3, $4)
+        `, [id, finalNomContact, (ct.valeur || '').trim() || 'N/A', Boolean(ct.est_principal)]);
+      }
+    } else if (contact) {
+      // Upsert contact principal
+      const cleanNom = (nom_contact || '').replace(/^\[.*?\]\s*/, '').trim();
+      const fallbackNom = (contact && String(contact).includes('@')) ? 'email' : 'Contact Principal';
+      const existContact = await db.query('SELECT id FROM Contact WHERE id_client = $1 AND est_principal = TRUE', [id]);
+      if (existContact.rows.length > 0) {
+        await db.query('UPDATE Contact SET valeur = $1, nom_contact = COALESCE($2, nom_contact) WHERE id = $3', [
+          (contact || '').trim(),
+          cleanNom || fallbackNom,
+          existContact.rows[0].id
+        ]);
+      } else {
+        await db.query('INSERT INTO Contact (id_client, nom_contact, valeur, est_principal) VALUES ($1, $2, $3, TRUE)', [
+          id,
+          cleanNom || fallbackNom,
+          (contact || '').trim()
+        ]);
+      }
+    }
+
+    const updatedClient = await this.getById(id);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'MODIFICATION',
+      entite_concernee: 'CLIENT',
+      reference_entite: String(id),
+      valeur_apres: updatedClient,
+      message_notification: `Mise à jour des informations du client "${updatedClient.nom_client || updatedClient.raison_sociale}" (ID: ${id}).`
+    });
+
+    return updatedClient;
+  }
+
+  static async delete(id) {
+    const current = await this.getById(id);
+
+    const aboCheck = await db.query('SELECT reference FROM Abonnement WHERE id_client = $1 LIMIT 1', [id]);
+    if (aboCheck.rows.length > 0) {
+      const error = new Error("Impossible de supprimer ce client car il possède un ou plusieurs contrats d'abonnement. Veuillez supprimer ou transférer ses contrats au préalable.");
+      error.statusCode = 400;
+      throw error;
+    }
+    await db.query('DELETE FROM Contact WHERE id_client = $1', [id]);
+    await db.query('DELETE FROM Action_Commerciale WHERE id_client = $1', [id]);
+    const { rows } = await db.query('DELETE FROM Client WHERE id = $1 RETURNING *', [id]);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'SUPPRESSION',
+      entite_concernee: 'CLIENT',
+      reference_entite: String(id),
+      valeur_apres: current,
+      message_notification: `Suppression du client "${current?.nom_client || current?.raison_sociale || id}" (ID: ${id}).`
+    });
+
+    return rows[0];
+  }
+
+  static async getContacts(clientId) {
+    const { rows } = await db.query(
+      'SELECT id, id_client, nom_contact, valeur, est_principal FROM Contact WHERE id_client = $1 ORDER BY est_principal DESC, id ASC',
+      [clientId]
+    );
+    return rows;
+  }
+}
+
+module.exports = ClientModel;

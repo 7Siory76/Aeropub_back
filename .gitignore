@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Environment files & credentials (Protection anti-bot / fuite de données et mot de passe)
+.env
+.env.*
+*.env
+!.env.example
+
+# Private keys, certificates and secrets
+*.pem
+*.key
+*.cert
+*.pfx
+*.p12
+*credentials*.json
+*serviceAccount*.json
+*service-account*.json
+
+# File uploads
+uploads/*
+!uploads/.gitkeep
+
+# Logs and runtime data
+*.log
+npm-debug.log*
+
+# Editor & OS files
+.vscode/
+.idea/
+.DS_Store

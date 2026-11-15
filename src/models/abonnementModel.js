@@ -1,0 +1,1002 @@
+const db = require('../config/db');
+const JournalNotificationModel = require('./journalNotificationModel');
+
+class AbonnementModel {
+  static async resolveIdTypeStatut(statutOrId) {
+    if (!statutOrId) {
+      const resultatStatutActif = await db.query("SELECT id FROM Type_Statut_Abonnement WHERE LOWER(nom_statut) = 'actif' LIMIT 1");
+      return resultatStatutActif.rows[0]?.id || 3;
+    }
+    if (typeof statutOrId === 'number' || (!isNaN(Number(statutOrId)) && String(statutOrId).trim() !== '')) {
+      return parseInt(statutOrId, 10);
+    }
+    const cleanNom = String(statutOrId).trim();
+    const resultatStatut = await db.query('SELECT id FROM Type_Statut_Abonnement WHERE LOWER(nom_statut) = LOWER($1) LIMIT 1', [cleanNom]);
+    if (resultatStatut.rows.length > 0) {
+      return resultatStatut.rows[0].id;
+    }
+    try {
+      const created = await db.query('INSERT INTO Type_Statut_Abonnement (nom_statut) VALUES ($1) RETURNING id', [cleanNom]);
+      return created.rows[0].id;
+    } catch {
+      const fallback = await db.query('SELECT id FROM Type_Statut_Abonnement LIMIT 1');
+      return fallback.rows[0]?.id || 3;
+    }
+  }
+
+  static async cascadeStatutToSupports(referenceAbonnement, statutOrId, idUtilisateur = null) {
+    // 1. Récupérer les informations complètes du contrat d'abonnement
+    const aboRes = await db.query(
+      'SELECT reference, date_debut, date_echeance, date_creation, id_commercial FROM Abonnement WHERE reference = $1',
+      [referenceAbonnement]
+    );
+    const abo = aboRes.rows[0];
+    if (!abo) return;
+
+    let nomStatut = statutOrId;
+    if (!nomStatut) {
+      const lastStatut = await db.query(`
+        SELECT tsa.nom_statut 
+        FROM Statut_Abonnement sa
+        JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
+        WHERE sa.id_abonnement = $1
+        ORDER BY sa.id DESC LIMIT 1
+      `, [referenceAbonnement]);
+      nomStatut = lastStatut.rows[0]?.nom_statut || 'actif';
+    } else if (typeof statutOrId === 'number' || (!isNaN(Number(statutOrId)) && String(statutOrId).trim() !== '')) {
+      const resultatStatutType = await db.query('SELECT nom_statut FROM Type_Statut_Abonnement WHERE id = $1', [parseInt(statutOrId, 10)]);
+      nomStatut = resultatStatutType.rows[0]?.nom_statut || '';
+    }
+
+    const stClean = String(nomStatut).trim().toLowerCase();
+
+    // 2. Déterminer l'état du support correspondant
+    let targetEtatNom = 'disponible';
+    let targetEtatId = 1;
+    if (stClean === 'brouillon' || stClean.includes('valid')) {
+      targetEtatNom = 'réservé';
+      targetEtatId = 2;
+    } else if (stClean.includes('actif') || stClean.includes('renouv') || stClean.includes('échu') || stClean.includes('echu')) {
+      targetEtatNom = 'occupé';
+      targetEtatId = 3;
+    } else if (stClean.includes('maint')) {
+      targetEtatNom = 'en maintenance';
+      targetEtatId = 4;
+    } else {
+      // Expiré, résilié, archivé
+      targetEtatNom = 'disponible';
+      targetEtatId = 1;
+    }
+
+    // 3. Récupérer tous les supports liés au contrat
+    const supportsRows = await db.query(
+      'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
+      [referenceAbonnement]
+    );
+    const supportRefs = supportsRows.rows.map(r => r.reference_support);
+    if (supportRefs.length === 0) return;
+
+    // Date et heure de saisie actuelle
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const dateSaisieStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+    // 4. Mettre à jour l'historique Etat_Support pour chaque support
+    for (const supRef of supportRefs) {
+      // Clôturer l'ancien état ouvert/actif s'il y en a un
+      await db.query(`
+        UPDATE Etat_Support 
+        SET date_fin = CURRENT_TIMESTAMP 
+        WHERE reference_support = $1 AND (date_fin IS NULL OR date_fin > CURRENT_TIMESTAMP)
+      `, [supRef]);
+
+      // Déterminer les dates exactes selon le type d'état :
+      let supDateDebut = abo.date_debut;
+      let supDateFin = abo.date_echeance;
+
+      if (targetEtatNom === 'disponible') {
+        // Libéré (contrat expiré, résilié ou archivé) : disponible à partir de maintenant, durée indéterminée
+        supDateDebut = new Date();
+        supDateFin = null;
+      } else {
+        // Réservé, Occupé, etc. : date_debut reste STRICTEMENT la date de début contractuelle de l'abonnement
+        supDateDebut = abo.date_debut;
+        supDateFin = abo.date_echeance;
+      }
+
+      await db.query(`
+        INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, date_fin, observation)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        supRef,
+        targetEtatId,
+        supDateDebut,
+        supDateFin,
+        `[Saisie le ${dateSaisieStr}] Contrat ${referenceAbonnement} : ${targetEtatNom} (Statut: ${nomStatut})`
+      ]);
+
+      // Journalisation du changement d'état du support
+      await JournalNotificationModel.logAction({
+        id_utilisateur: idUtilisateur || abo.id_commercial || null,
+        categorie_action: 'STATUT',
+        entite_concernee: 'SUPPORT',
+        reference_entite: supRef,
+        valeur_apres: {
+          support: supRef,
+          nouvel_etat: targetEtatNom,
+          id_type_etat: targetEtatId,
+          reference_abonnement: referenceAbonnement,
+          statut_contrat: nomStatut
+        },
+        message_notification: `Le support ${supRef} est passé à l'état "${targetEtatNom}" suite au passage du contrat ${referenceAbonnement} au statut "${nomStatut}".`
+      });
+    }
+  }
+
+  static async getAll(filters = {}) {
+    const { limit, offset, search, statut, id_commercial, date_debut, date_echeance } = filters;
+    const conditions = [];
+    const params = [];
+
+    if (search && String(search).trim() !== '') {
+      params.push(`%${String(search).trim().toLowerCase()}%`);
+      conditions.push(`(
+        LOWER(a.reference) LIKE $${params.length} 
+        OR LOWER(cl.raison_sociale) LIKE $${params.length} 
+        OR LOWER(a.annonceur_campagne) LIKE $${params.length}
+      )`);
+    }
+
+    if (id_commercial) {
+      params.push(parseInt(id_commercial, 10));
+      conditions.push(`a.id_commercial = $${params.length}`);
+    }
+
+    if (date_debut) {
+      params.push(date_debut);
+      conditions.push(`a.date_debut >= $${params.length}`);
+    }
+
+    if (date_echeance) {
+      params.push(date_echeance);
+      conditions.push(`a.date_echeance <= $${params.length}`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    let paginationClause = '';
+    if (limit !== undefined && !isNaN(Number(limit))) {
+      params.push(parseInt(limit, 10));
+      paginationClause += ` LIMIT $${params.length}`;
+      if (offset !== undefined && !isNaN(Number(offset))) {
+        params.push(parseInt(offset, 10));
+        paginationClause += ` OFFSET $${params.length}`;
+      }
+    }
+
+    const query = `
+      SELECT 
+        a.reference,
+        a.id_client,
+        a.id_commercial,
+        a.id_abonnement_precedent,
+        a.annonceur_campagne,
+        a.tarif,
+        a.devise,
+        a.periodicite,
+        a.date_debut,
+        a.date_echeance,
+        a.reconduction_tacite,
+        a.preavis_jours,
+        a.motif_non_renouvellement,
+        a.date_creation,
+        a.reference AS id,
+        cl.raison_sociale,
+        cl.raison_sociale AS nom_client,
+        cl.etat_client,
+        u.nom AS nom_commercial,
+        u.email AS email_commercial,
+        a.date_echeance AS date_fin,
+        COALESCE(sup.supports_list, '') AS supports_associes,
+        COALESCE(sup.first_support, '') AS reference_emplacement,
+        COALESCE(sup.supports_details, '[]'::json) AS supports_details,
+        COALESCE(sup.supports_details, '[]'::json) AS supports,
+        COALESCE(st.statut, 'actif') AS statut_abonnement,
+        COALESCE(st.statut, 'actif') AS statut,
+        st.id_type_statut,
+        EXISTS (
+          SELECT 1 FROM Abonnement child 
+          WHERE child.id_abonnement_precedent = a.reference
+        ) AS a_renouvellement
+      FROM Abonnement a
+      LEFT JOIN Client cl ON a.id_client = cl.id
+      LEFT JOIN Utilisateur u ON a.id_commercial = u.id
+      LEFT JOIN LATERAL (
+        SELECT 
+          STRING_AGG(asup.reference_support, ', ' ORDER BY asup.reference_support) AS supports_list,
+          (ARRAY_AGG(asup.reference_support ORDER BY asup.reference_support))[1] AS first_support,
+          COALESCE(JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'reference_support', asup.reference_support,
+              'reference', asup.reference_support,
+              'prix_support', COALESCE(asup.prix_support, 0)
+            ) ORDER BY asup.reference_support
+          ) FILTER (WHERE asup.reference_support IS NOT NULL), '[]'::json) AS supports_details
+        FROM Abonnement_Support asup
+        WHERE asup.id_abonnement = a.reference
+      ) sup ON true
+      LEFT JOIN LATERAL (
+        SELECT sa.id_type_statut, tsa.nom_statut AS statut, sa.commentaire, sa.date_debut
+        FROM Statut_Abonnement sa
+        LEFT JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
+        WHERE sa.id_abonnement = a.reference
+        ORDER BY sa.id DESC
+        LIMIT 1
+      ) st ON true
+      ${whereClause}
+      ORDER BY a.date_creation DESC, a.reference ASC
+      ${paginationClause}
+    `;
+    const { rows } = await db.query(query, params);
+    return rows;
+  }
+
+  static async getById(reference) {
+    const query = `
+      SELECT 
+        a.reference,
+        a.id_client,
+        a.id_commercial,
+        a.id_abonnement_precedent,
+        a.annonceur_campagne,
+        a.tarif,
+        a.devise,
+        a.periodicite,
+        a.date_debut,
+        a.date_echeance,
+        a.reconduction_tacite,
+        a.preavis_jours,
+        a.motif_non_renouvellement,
+        a.date_creation,
+        a.reference AS id,
+        cl.raison_sociale,
+        cl.raison_sociale AS nom_client,
+        cl.etat_client,
+        u.nom AS nom_commercial,
+        u.email AS email_commercial,
+        a.date_echeance AS date_fin,
+        COALESCE(sup.supports_list, '') AS supports_associes,
+        COALESCE(sup.first_support, '') AS reference_emplacement,
+        COALESCE(sup.supports_details, '[]'::json) AS supports_details,
+        COALESCE(sup.supports_details, '[]'::json) AS supports,
+        COALESCE(st.statut, 'actif') AS statut_abonnement,
+        COALESCE(st.statut, 'actif') AS statut,
+        st.id_type_statut,
+        EXISTS (
+          SELECT 1 FROM Abonnement child 
+          WHERE child.id_abonnement_precedent = a.reference
+        ) AS a_renouvellement
+      FROM Abonnement a
+      LEFT JOIN Client cl ON a.id_client = cl.id
+      LEFT JOIN Utilisateur u ON a.id_commercial = u.id
+      LEFT JOIN LATERAL (
+        SELECT 
+          STRING_AGG(asup.reference_support, ', ' ORDER BY asup.reference_support) AS supports_list,
+          (ARRAY_AGG(asup.reference_support ORDER BY asup.reference_support))[1] AS first_support,
+          COALESCE(JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'reference_support', asup.reference_support,
+              'reference', asup.reference_support,
+              'prix_support', COALESCE(asup.prix_support, 0)
+            ) ORDER BY asup.reference_support
+          ) FILTER (WHERE asup.reference_support IS NOT NULL), '[]'::json) AS supports_details
+        FROM Abonnement_Support asup
+        WHERE asup.id_abonnement = a.reference
+      ) sup ON true
+      LEFT JOIN LATERAL (
+        SELECT sa.id_type_statut, tsa.nom_statut AS statut, sa.commentaire, sa.date_debut
+        FROM Statut_Abonnement sa
+        LEFT JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
+        WHERE sa.id_abonnement = a.reference
+        ORDER BY sa.id DESC
+        LIMIT 1
+      ) st ON true
+      WHERE a.reference = $1 OR CAST(a.id_client AS VARCHAR) = $1
+    `;
+    const { rows } = await db.query(query, [String(reference)]);
+    return rows[0];
+  }
+
+  static async checkSupportConflict({ supportRef, excludeAboRef, dateDebut, dateFin }) {
+    if (!supportRef || !dateDebut || !dateFin) return null;
+
+    const query = `
+      SELECT 
+        a.reference, 
+        a.date_debut, 
+        a.date_echeance, 
+        cl.raison_sociale
+      FROM Abonnement a
+      JOIN Abonnement_Support asup ON asup.id_abonnement = a.reference
+      LEFT JOIN Client cl ON cl.id = a.id_client
+      LEFT JOIN LATERAL (
+        SELECT tsa.nom_statut
+        FROM Statut_Abonnement sa
+        JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
+        WHERE sa.id_abonnement = a.reference
+        ORDER BY sa.id DESC
+        LIMIT 1
+      ) st ON true
+      WHERE asup.reference_support = $1
+        AND ($2::text IS NULL OR a.reference != $2)
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%archiv%'
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%r_sili%'
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%resili%'
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%annul%'
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%expir%'
+        AND COALESCE(st.nom_statut, 'actif') NOT ILIKE '%renouv%'
+        AND a.date_debut < $4
+        AND a.date_echeance > $3
+      LIMIT 1
+    `;
+
+    const resultatConflit = await db.query(query, [
+      supportRef,
+      excludeAboRef || null,
+      dateDebut,
+      dateFin
+    ]);
+
+    if (resultatConflit.rows.length > 0) {
+      return resultatConflit.rows[0];
+    }
+    return null;
+  }
+
+  static async create({
+    reference,
+    id_client,
+    id_commercial,
+    id_abonnement_precedent,
+    annonceur_campagne,
+    tarif,
+    devise,
+    periodicite,
+    date_debut,
+    date_echeance,
+    date_fin,
+    reconduction_tacite,
+    preavis_jours,
+    motif_non_renouvellement,
+    id_type_statut,
+    statut,
+    reference_support,
+    reference_emplacement,
+    supports = []
+  }) {
+    if (!id_client) {
+      const error = new Error('Le client est requis pour créer un contrat.');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (tarif !== undefined && tarif !== null && tarif !== '') {
+      const parsedTarif = parseFloat(tarif);
+      if (isNaN(parsedTarif) || parsedTarif < 0) {
+        const error = new Error('Le montant du tarif ne peut pas être négatif.');
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+    if (preavis_jours !== undefined && preavis_jours !== null && preavis_jours !== '') {
+      const parsedPreavis = parseInt(preavis_jours, 10);
+      if (isNaN(parsedPreavis) || parsedPreavis < 0) {
+        const error = new Error('Le délai de préavis ne peut pas être négatif.');
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+
+    let finalRef = reference && String(reference).trim().length > 0 ? String(reference).trim() : null;
+    if (!finalRef) {
+      const year = new Date().getFullYear();
+      const countRes = await db.query('SELECT COUNT(*) AS total FROM Abonnement');
+      let seqNum = parseInt(countRes.rows[0].total, 10) + 1;
+      while (true) {
+        const candidateRef = `ABO-${year}-${String(seqNum).padStart(3, '0')}`;
+        const check = await db.query('SELECT 1 FROM Abonnement WHERE reference = $1', [candidateRef]);
+        if (check.rows.length === 0) {
+          finalRef = candidateRef;
+          break;
+        }
+        seqNum++;
+      }
+    } else {
+      const checkExisting = await db.query('SELECT reference FROM Abonnement WHERE reference = $1', [finalRef]);
+      if (checkExisting.rows.length > 0) {
+        const error = new Error(`La référence de contrat "${finalRef}" existe déjà. Veuillez utiliser une autre référence.`);
+        error.statusCode = 409;
+        throw error;
+      }
+    }
+
+    const finalClient = parseInt(id_client, 10);
+    const finalCommercial = id_commercial ? parseInt(id_commercial, 10) : 1;
+    let finalTarif = Math.max(0, parseFloat(tarif) || 0);
+    const finalDateDebut = date_debut || new Date();
+    const finalDateEcheance = date_echeance || date_fin || new Date();
+
+    if (new Date(finalDateEcheance) < new Date(finalDateDebut)) {
+      const error = new Error("La date d'échéance doit être postérieure ou égale à la date de début.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Normalisation des supports avec leur prix respectif
+    const supportsWithPrice = [];
+    if (Array.isArray(supports)) {
+      supports.forEach(s => {
+        const refStr = typeof s === 'string' ? s.trim() : (s.reference_support || s.reference || '').trim();
+        const price = (s && typeof s === 'object' && s.prix_support !== undefined && s.prix_support !== null && s.prix_support !== '')
+          ? (parseFloat(s.prix_support) || 0)
+          : null;
+        if (refStr && !supportsWithPrice.some(item => item.reference === refStr)) {
+          supportsWithPrice.push({ reference: refStr, prix_support: price });
+        }
+      });
+    }
+    if (reference_support) {
+      const refStr = String(reference_support).trim();
+      if (!supportsWithPrice.some(item => item.reference === refStr)) {
+        supportsWithPrice.push({ reference: refStr, prix_support: null });
+      }
+    }
+    if (reference_emplacement) {
+      const refStr = String(reference_emplacement).trim();
+      if (!supportsWithPrice.some(item => item.reference === refStr)) {
+        supportsWithPrice.push({ reference: refStr, prix_support: null });
+      }
+    }
+
+    // Calcul du tarif total à partir des prix des supports
+    const totalSupportsPrix = supportsWithPrice.reduce((sum, s) => sum + (s.prix_support || 0), 0);
+    if (totalSupportsPrix > 0) {
+      finalTarif = totalSupportsPrix;
+    } else if (tarif !== undefined && tarif !== null && tarif !== '') {
+      finalTarif = Math.max(0, parseFloat(tarif) || 0);
+      if (supportsWithPrice.length === 1 && supportsWithPrice[0].prix_support === null) {
+        supportsWithPrice[0].prix_support = finalTarif;
+      }
+    }
+
+    supportsWithPrice.forEach(s => {
+      if (s.prix_support === null || isNaN(s.prix_support)) s.prix_support = 0;
+    });
+
+    const allSupports = supportsWithPrice.map(s => s.reference);
+
+    for (const supRef of allSupports) {
+      const conflict = await this.checkSupportConflict({
+        supportRef: supRef,
+        excludeAboRef: id_abonnement_precedent || null,
+        dateDebut: finalDateDebut,
+        dateFin: finalDateEcheance
+      });
+      if (conflict) {
+        const debutStr = new Date(conflict.date_debut).toLocaleDateString('fr-FR');
+        const finStr = new Date(conflict.date_echeance).toLocaleDateString('fr-FR');
+        const error = new Error(
+          `Conflit de dates : le support "${supRef}" n'est pas disponible du ${new Date(finalDateDebut).toLocaleDateString('fr-FR')} au ${new Date(finalDateEcheance).toLocaleDateString('fr-FR')} (déjà réservé du ${debutStr} au ${finStr} par ${conflict.raison_sociale || 'Contrat ' + conflict.reference}).`
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+    }
+
+    let finalPeriodicite = periodicite;
+    if (!finalPeriodicite || String(finalPeriodicite).trim() === '') {
+      const d1 = new Date(finalDateDebut);
+      const d2 = new Date(finalDateEcheance);
+      const diffMonths = Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24 * 30.4375));
+      if (diffMonths <= 1) {
+        finalPeriodicite = 'Mensuel';
+      } else if (diffMonths >= 2 && diffMonths <= 4) {
+        finalPeriodicite = 'Trimestriel';
+      } else if (diffMonths >= 5 && diffMonths <= 8) {
+        finalPeriodicite = 'Semestriel';
+      } else {
+        finalPeriodicite = 'Annuel';
+      }
+    }
+
+    const insertAboQuery = `
+      INSERT INTO Abonnement (
+        reference, id_client, id_commercial, id_abonnement_precedent,
+        annonceur_campagne, tarif, devise, periodicite, date_debut,
+        date_echeance, reconduction_tacite, preavis_jours,
+        motif_non_renouvellement
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      RETURNING *
+    `;
+
+    await db.query(insertAboQuery, [
+      finalRef,
+      finalClient,
+      finalCommercial,
+      id_abonnement_precedent || null,
+      annonceur_campagne || null,
+      finalTarif,
+      devise || 'MGA',
+      finalPeriodicite,
+      finalDateDebut,
+      finalDateEcheance,
+      reconduction_tacite === true || reconduction_tacite === 'true',
+      preavis_jours ? parseInt(preavis_jours, 10) : 30,
+      motif_non_renouvellement || null
+    ]);
+
+    for (const sup of supportsWithPrice) {
+      await db.query(`
+        INSERT INTO Abonnement_Support (id_abonnement, reference_support, prix_support)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (id_abonnement, reference_support) 
+        DO UPDATE SET prix_support = EXCLUDED.prix_support
+      `, [finalRef, sup.reference, sup.prix_support]);
+    }
+
+    // Si des prix individuels ont été saisis, synchroniser le tarif global avec la somme exacte
+    if (totalSupportsPrix > 0) {
+      await db.query('UPDATE Abonnement SET tarif = $1 WHERE reference = $2', [totalSupportsPrix, finalRef]);
+    }
+
+    const resolvedIdStatut = await this.resolveIdTypeStatut(id_type_statut || statut || 3);
+    const statutRes = await db.query('SELECT nom_statut FROM Type_Statut_Abonnement WHERE id = $1', [resolvedIdStatut]);
+    const nomStatut = statutRes.rows[0]?.nom_statut || 'Actif';
+
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const dateSaisieStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+    await db.query(`
+      INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, date_fin, commentaire)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [
+      finalRef,
+      resolvedIdStatut,
+      finalDateDebut,
+      finalDateEcheance,
+      `[Saisie le ${dateSaisieStr}] Création du contrat (${nomStatut})`
+    ]);
+
+    await this.cascadeStatutToSupports(finalRef, resolvedIdStatut, finalCommercial);
+    await JournalNotificationModel.logAction({
+      id_utilisateur: finalCommercial,
+      categorie_action: 'CREATION',
+      entite_concernee: 'ABONNEMENT',
+      reference_entite: finalRef,
+      valeur_apres: {
+        reference: finalRef,
+        id_client: finalClient,
+        tarif: finalTarif,
+        supports: allSupports
+      },
+      message_notification: `Nouveau contrat ${finalRef} créé avec ${allSupports.length} support(s).`
+    });
+
+    return this.getById(finalRef);
+  }
+
+  static async update(reference, {
+    id_client,
+    id_commercial,
+    id_abonnement_precedent,
+    annonceur_campagne,
+    tarif,
+    devise,
+    periodicite,
+    date_debut,
+    date_echeance,
+    date_fin,
+    reconduction_tacite,
+    preavis_jours,
+    motif_non_renouvellement,
+    id_type_statut,
+    statut,
+    reference_support,
+    reference_emplacement,
+    supports
+  }) {
+    if (tarif !== undefined && tarif !== null && tarif !== '') {
+      const parsedTarif = parseFloat(tarif);
+      if (isNaN(parsedTarif) || parsedTarif < 0) {
+        const error = new Error('Le montant du tarif ne peut pas être négatif.');
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+
+    if (preavis_jours !== undefined && preavis_jours !== null && preavis_jours !== '') {
+      const parsedPreavis = parseInt(preavis_jours, 10);
+      if (isNaN(parsedPreavis) || parsedPreavis < 0) {
+        const error = new Error('Le délai de préavis ne peut pas être négatif.');
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+
+    const currentAbo = await this.getById(reference);
+    if (!currentAbo) {
+      const error = new Error(`Contrat "${reference}" introuvable.`);
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const targetDateDebut = date_debut || currentAbo.date_debut;
+    const targetDateFin = date_echeance || date_fin || currentAbo.date_echeance || currentAbo.date_fin;
+
+    if (new Date(targetDateFin) < new Date(targetDateDebut)) {
+      const error = new Error("La date d'échéance doit être postérieure ou égale à la date de début.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    let calculatedTarif = null;
+
+    if (supports !== undefined && Array.isArray(supports)) {
+      const currentStatut = String(currentAbo.statut_abonnement || currentAbo.statut || '').trim().toLowerCase();
+      const isLocked = currentStatut.includes('actif') || currentStatut.includes('archiv');
+
+      const currentSupportsRows = await db.query(
+        'SELECT reference_support, prix_support FROM Abonnement_Support WHERE id_abonnement = $1',
+        [reference]
+      );
+      const currentSupList = currentSupportsRows.rows.map(r => r.reference_support).sort();
+
+      const supportsWithPrice = supports.map(s => {
+        const ref = typeof s === 'string' ? s.trim() : String(s.reference_support || s.reference || '').trim();
+        const price = (s && typeof s === 'object' && s.prix_support !== undefined && s.prix_support !== null && s.prix_support !== '')
+          ? (parseFloat(s.prix_support) || 0)
+          : 0;
+        return { reference: ref, prix_support: price };
+      }).filter(s => Boolean(s.reference));
+
+      const newSupList = [...new Set(supportsWithPrice.map(s => s.reference))].sort();
+      const hasSupListChanged = JSON.stringify(currentSupList) !== JSON.stringify(newSupList);
+
+      if (hasSupListChanged && isLocked) {
+        const error = new Error(
+          "Le contrat est déjà actif (ou archivé) : la modification des supports liés requiert une autorisation de l'administrateur."
+        );
+        error.statusCode = 403;
+        throw error;
+      }
+
+      for (const supRef of newSupList) {
+        const conflict = await this.checkSupportConflict({
+          supportRef: supRef,
+          excludeAboRef: reference,
+          dateDebut: targetDateDebut,
+          dateFin: targetDateFin
+        });
+        if (conflict) {
+          const debutStr = new Date(conflict.date_debut).toLocaleDateString('fr-FR');
+          const finStr = new Date(conflict.date_echeance).toLocaleDateString('fr-FR');
+          const error = new Error(
+            `Le support "${supRef}" n'est pas disponible entre le ${new Date(targetDateDebut).toLocaleDateString('fr-FR')} et le ${new Date(targetDateFin).toLocaleDateString('fr-FR')} : déjà réservé du ${debutStr} au ${finStr} par ${conflict.raison_sociale || 'Contrat ' + conflict.reference}.`
+          );
+          error.statusCode = 409;
+          throw error;
+        }
+      }
+
+      await db.query('DELETE FROM Abonnement_Support WHERE id_abonnement = $1', [reference]);
+      for (const sup of supportsWithPrice) {
+        await db.query(
+          `INSERT INTO Abonnement_Support (id_abonnement, reference_support, prix_support) 
+           VALUES ($1, $2, $3) 
+           ON CONFLICT (id_abonnement, reference_support) DO UPDATE SET prix_support = EXCLUDED.prix_support`,
+          [reference, sup.reference, sup.prix_support]
+        );
+      }
+
+      const sumResult = await db.query(
+        'SELECT COALESCE(SUM(prix_support), 0) AS total FROM Abonnement_Support WHERE id_abonnement = $1',
+        [reference]
+      );
+      calculatedTarif = parseFloat(sumResult.rows[0]?.total || 0);
+    } else {
+      const supRef = reference_support || reference_emplacement;
+      if (supRef) {
+        const conflict = await this.checkSupportConflict({
+          supportRef: supRef,
+          excludeAboRef: reference,
+          dateDebut: targetDateDebut,
+          dateFin: targetDateFin
+        });
+        if (conflict) {
+          const debutStr = new Date(conflict.date_debut).toLocaleDateString('fr-FR');
+          const finStr = new Date(conflict.date_echeance).toLocaleDateString('fr-FR');
+          const error = new Error(
+            `Le support "${supRef}" n'est pas disponible entre le ${new Date(targetDateDebut).toLocaleDateString('fr-FR')} et le ${new Date(targetDateFin).toLocaleDateString('fr-FR')} : déjà réservé du ${debutStr} au ${finStr} par ${conflict.raison_sociale || 'Contrat ' + conflict.reference}.`
+          );
+          error.statusCode = 409;
+          throw error;
+        }
+
+        await db.query(`
+          INSERT INTO Abonnement_Support (id_abonnement, reference_support)
+          VALUES ($1, $2)
+          ON CONFLICT DO NOTHING
+        `, [reference, supRef]);
+
+        await JournalNotificationModel.logAction({
+          id_utilisateur: id_commercial ? parseInt(id_commercial, 10) : null,
+          categorie_action: 'ASSOCIATION',
+          entite_concernee: 'SUPPORT',
+          reference_entite: supRef,
+          valeur_apres: {
+            support: supRef,
+            id_abonnement: reference
+          },
+          message_notification: `Support "${supRef}" associé au contrat ${reference}.`
+        });
+      } else if (date_debut || date_echeance || date_fin) {
+        const currentSupportsRows = await db.query(
+          'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
+          [reference]
+        );
+        for (const row of currentSupportsRows.rows) {
+          const conflict = await this.checkSupportConflict({
+            supportRef: row.reference_support,
+            excludeAboRef: reference,
+            dateDebut: targetDateDebut,
+            dateFin: targetDateFin
+          });
+          if (conflict) {
+            const debutStr = new Date(conflict.date_debut).toLocaleDateString('fr-FR');
+            const finStr = new Date(conflict.date_echeance).toLocaleDateString('fr-FR');
+            const error = new Error(
+              `Le support "${row.reference_support}" est déjà réservé du ${debutStr} au ${finStr} par ${conflict.raison_sociale || 'Contrat ' + conflict.reference}. Impossible de modifier les dates du contrat.`
+            );
+            error.statusCode = 409;
+            throw error;
+          }
+        }
+      }
+    }
+
+    const finalDateEcheance = date_echeance || date_fin;
+
+    await db.query(`
+      UPDATE Abonnement
+      SET id_client = COALESCE($1, id_client),
+          id_commercial = COALESCE($2, id_commercial),
+          annonceur_campagne = COALESCE($3, annonceur_campagne),
+          tarif = COALESCE($4, tarif),
+          devise = COALESCE($5, devise),
+          periodicite = COALESCE($6, periodicite),
+          date_debut = COALESCE($7, date_debut),
+          date_echeance = COALESCE($8, date_echeance),
+          reconduction_tacite = COALESCE($9, reconduction_tacite),
+          preavis_jours = COALESCE($10, preavis_jours),
+          motif_non_renouvellement = COALESCE($11, motif_non_renouvellement),
+          id_abonnement_precedent = COALESCE($12, id_abonnement_precedent)
+      WHERE reference = $13
+    `, [
+      id_client ? parseInt(id_client, 10) : null,
+      id_commercial ? parseInt(id_commercial, 10) : null,
+      annonceur_campagne !== undefined ? annonceur_campagne : null,
+      calculatedTarif !== null ? calculatedTarif : (tarif !== undefined ? parseFloat(tarif) : null),
+      devise || null,
+      periodicite || null,
+      date_debut || null,
+      finalDateEcheance || null,
+      reconduction_tacite !== undefined ? (reconduction_tacite === true || reconduction_tacite === 'true') : null,
+      preavis_jours !== undefined ? parseInt(preavis_jours, 10) : null,
+      motif_non_renouvellement !== undefined ? motif_non_renouvellement : null,
+      id_abonnement_precedent !== undefined ? id_abonnement_precedent : null,
+      reference
+    ]);
+
+    // Mettre à jour le statut si spécifié
+    const newStatut = id_type_statut || statut;
+    if (newStatut) {
+      const resolvedIdStatut = await this.resolveIdTypeStatut(newStatut);
+      const statutRes = await db.query('SELECT nom_statut FROM Type_Statut_Abonnement WHERE id = $1', [resolvedIdStatut]);
+      const nomStatut = statutRes.rows[0]?.nom_statut || 'Actif';
+      const cleanNomStatut = String(nomStatut).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+      // Si on active ou réactive le contrat, vérifier qu'aucun support n'est déjà réservé par un autre contrat
+      const isActivating = !cleanNomStatut.includes('resili') &&
+        !cleanNomStatut.includes('archiv') &&
+        !cleanNomStatut.includes('annul') &&
+        !cleanNomStatut.includes('expir');
+
+      if (isActivating) {
+        const currentSups = await db.query(
+          'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
+          [reference]
+        );
+        for (const row of currentSups.rows) {
+          const supRef = row.reference_support;
+          const conflict = await this.checkSupportConflict({
+            supportRef: supRef,
+            excludeAboRef: reference,
+            dateDebut: targetDateDebut,
+            dateFin: targetDateFin
+          });
+          if (conflict) {
+            const debStr = new Date(conflict.date_debut).toLocaleDateString('fr-FR');
+            const finStr = new Date(conflict.date_echeance).toLocaleDateString('fr-FR');
+            const error = new Error(
+              `Impossible de passer le contrat au statut "${nomStatut}" : le support "${supRef}" a déjà été réattribué au contrat ${conflict.reference} (${conflict.raison_sociale || 'Client'}) du ${debStr} au ${finStr}.`
+            );
+            error.statusCode = 409;
+            throw error;
+          }
+        }
+      }
+
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const dateSaisieStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+      // Clôturer le statut précédent en cours
+      await db.query(`
+        UPDATE Statut_Abonnement 
+        SET date_fin = CURRENT_TIMESTAMP 
+        WHERE id_abonnement = $1 AND (date_fin IS NULL OR date_fin > CURRENT_TIMESTAMP)
+      `, [reference]);
+
+      await db.query(`
+        INSERT INTO Statut_Abonnement (id_abonnement, id_type_statut, date_debut, date_fin, commentaire)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        reference,
+        resolvedIdStatut,
+        targetDateDebut, // Reste STRICTEMENT la date de début contractuelle
+        targetDateFin,   // Reste STRICTEMENT la date d'échéance contractuelle
+        `[Saisie le ${dateSaisieStr}] Changement de statut vers ${nomStatut}`
+      ]);
+
+      await this.cascadeStatutToSupports(reference, resolvedIdStatut, id_commercial);
+    } else if (date_debut || date_echeance || date_fin || (supports !== undefined && Array.isArray(supports)) || reference_support || reference_emplacement) {
+      // Si les dates changent sans changement de statut, synchroniser les dates du dernier statut actif
+      if (date_debut || date_echeance || date_fin) {
+        await db.query(`
+          UPDATE Statut_Abonnement
+          SET date_debut = COALESCE($1, date_debut),
+              date_fin = COALESCE($2, date_fin)
+          WHERE id = (
+            SELECT id FROM Statut_Abonnement 
+            WHERE id_abonnement = $3 
+            ORDER BY id DESC LIMIT 1
+          )
+        `, [targetDateDebut, targetDateFin, reference]);
+      }
+      await this.cascadeStatutToSupports(reference, null, id_commercial);
+    }
+
+    // Journalisation de la mise à jour
+    await JournalNotificationModel.logAction({
+      id_utilisateur: id_commercial ? parseInt(id_commercial, 10) : null,
+      categorie_action: newStatut ? 'STATUT' : 'MODIFICATION',
+      entite_concernee: 'ABONNEMENT',
+      reference_entite: reference,
+      valeur_apres: {
+        date_debut: targetDateDebut,
+        date_echeance: targetDateFin,
+        statut: newStatut || currentAbo.statut_abonnement
+      },
+      message_notification: newStatut
+        ? `Contrat ${reference} : passage au statut "${newStatut}".`
+        : `Mise à jour des informations du contrat ${reference}.`
+    });
+
+    return this.getById(reference);
+  }
+
+  static async delete(reference) {
+    const current = await this.getById(reference);
+    if (!current) {
+      const error = new Error(`Contrat "${reference}" introuvable.`);
+      error.statusCode = 404;
+      throw error;
+    }
+
+    // Récupérer et libérer tous les supports liés
+    const supportsRows = await db.query(
+      'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
+      [reference]
+    );
+    const supportRefs = supportsRows.rows.map(r => r.reference_support);
+
+    for (const supRef of supportRefs) {
+      await db.query(`
+        UPDATE Etat_Support 
+        SET date_fin = CURRENT_TIMESTAMP 
+        WHERE reference_support = $1 AND (date_fin IS NULL OR date_fin > CURRENT_TIMESTAMP)
+      `, [supRef]);
+
+      await db.query(`
+        INSERT INTO Etat_Support (reference_support, id_type_etat, date_debut, date_fin, observation)
+        VALUES ($1, 1, CURRENT_TIMESTAMP, NULL, $2)
+      `, [supRef, `Contrat ${reference} supprimé : support libéré (disponible)`]);
+
+      await JournalNotificationModel.logAction({
+        categorie_action: 'STATUT',
+        entite_concernee: 'SUPPORT',
+        reference_entite: supRef,
+        valeur_apres: {
+          support: supRef,
+          nouvel_etat: 'disponible',
+          reference_abonnement: reference
+        },
+        message_notification: `Support "${supRef}" libéré (disponible) suite à la suppression du contrat ${reference}.`
+      });
+    }
+
+    await db.query('DELETE FROM Statut_Abonnement WHERE id_abonnement = $1', [reference]);
+    await db.query('DELETE FROM Abonnement_Support WHERE id_abonnement = $1', [reference]);
+    await db.query('DELETE FROM Action_Commerciale WHERE id_abonnement = $1', [reference]);
+    await db.query('DELETE FROM Document_Lie WHERE id_abonnement = $1', [reference]);
+    const { rows } = await db.query('DELETE FROM Abonnement WHERE reference = $1 RETURNING *', [reference]);
+
+    await JournalNotificationModel.logAction({
+      categorie_action: 'SUPPRESSION',
+      entite_concernee: 'ABONNEMENT',
+      reference_entite: reference,
+      valeur_apres: current,
+      message_notification: `Suppression du contrat ${reference}.`
+    });
+
+    return rows[0];
+  }
+
+  static async getSupportsByAbonnement(reference) {
+    const query = `
+      SELECT 
+        s.reference,
+        s.reference AS reference_support,
+        COALESCE(asup.prix_support, 0) AS prix_support,
+        s.id_zone,
+        s.id_categorie,
+        s.id_type,
+        s.caracteristiques,
+        ts.nom AS nom_type_support,
+        zt.nom_zone
+      FROM Abonnement_Support asup
+      JOIN Support s ON asup.reference_support = s.reference
+      LEFT JOIN Type_Support ts ON s.id_type = ts.id
+      LEFT JOIN Zone_Terminal zt ON s.id_zone = zt.id
+      WHERE asup.id_abonnement = $1
+      ORDER BY s.reference ASC
+    `;
+    const { rows } = await db.query(query, [reference]);
+    return rows;
+  }
+
+  static async getHistoriqueStatuts(reference) {
+    const query = `
+      SELECT 
+        sa.id,
+        sa.id_abonnement,
+        sa.id_type_statut,
+        sa.date_debut,
+        sa.date_fin,
+        sa.id_utilisateur,
+        sa.commentaire,
+        tsa.nom_statut,
+        u.nom AS nom_utilisateur
+      FROM Statut_Abonnement sa
+      LEFT JOIN Type_Statut_Abonnement tsa ON sa.id_type_statut = tsa.id
+      LEFT JOIN Utilisateur u ON sa.id_utilisateur = u.id
+      WHERE sa.id_abonnement = $1
+      ORDER BY sa.id DESC
+    `;
+    const { rows } = await db.query(query, [reference]);
+    return rows;
+  }
+}
+
+module.exports = AbonnementModel;
