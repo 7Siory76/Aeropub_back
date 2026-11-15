@@ -70,16 +70,71 @@ class CsvService {
     return contacts;
   }
 
-  static parseSupportsList(rawSupportsStr) {
+  /**
+   * Analyse la colonne Supports au format Tuple avec prix ou Liste standard :
+   * Ex. Tuple : [(REF-IV-001, 1500000), (REF-IV-002, 2000000)]
+   * Ex. Deux-points : [REF-IV-001: 1500000, REF-IV-002: 2000000]
+   * Ex. Standard : [REF-IV-001, REF-IV-002]
+   */
+  static parseSupportsWithPrice(rawSupportsStr) {
     if (!rawSupportsStr || !rawSupportsStr.trim() || rawSupportsStr.trim() === '[]') {
       return [];
     }
-    const cleaned = rawSupportsStr.replace(/[\[\]]/g, '').trim();
+    const cleanStr = (s) => (s || '').replace(/^['"]+|['"]+$/g, '').trim();
+    const cleanNum = (val) => {
+      if (val === undefined || val === null || String(val).trim() === '') return null;
+      const num = parseFloat(String(val).replace(/[\s\u00A0A-Za-z€$Ar]/g, '').replace(',', '.'));
+      return isNaN(num) ? null : Math.max(0, num);
+    };
+
+    const results = [];
+    const str = rawSupportsStr.trim();
+
+    // 1. Format Tuples entre parenthèses : [(REF-IV-001, 1500000), ...]
+    const tupleRegex = /\(([^)]+)\)/g;
+    let match;
+    let hasTuples = false;
+    while ((match = tupleRegex.exec(str)) !== null) {
+      hasTuples = true;
+      const content = match[1].trim();
+      if (!content) continue;
+      const parts = content.split(/[,;]+/).map(cleanStr);
+      if (parts.length >= 2) {
+        const ref = parts[0];
+        const prix = cleanNum(parts[1]);
+        if (ref) results.push({ reference: ref, prix_support: prix !== null ? prix : 0 });
+      } else if (parts.length === 1 && parts[0]) {
+        results.push({ reference: parts[0], prix_support: null });
+      }
+    }
+
+    if (hasTuples && results.length > 0) {
+      return results;
+    }
+
+    // 2. Format crochets ou liste simple : [REF-001: 1500000, REF-002: 2000000] ou [REF-001, REF-002]
+    const cleaned = str.replace(/[\[\]]/g, '').trim();
     if (!cleaned) return [];
-    return cleaned
-      .split(/[,;]+/)
-      .map(s => s.trim().replace(/^['"]+|['"]+$/g, ''))
-      .filter(Boolean);
+
+    const items = cleaned.split(/[,;]+/).map(cleanStr).filter(Boolean);
+    for (const item of items) {
+      if (item.includes(':')) {
+        const [refPart, pricePart] = item.split(':').map(cleanStr);
+        if (refPart) {
+          const prix = cleanNum(pricePart);
+          results.push({ reference: refPart, prix_support: prix !== null ? prix : 0 });
+        }
+      } else {
+        results.push({ reference: item, prix_support: null });
+      }
+    }
+
+    return results;
+  }
+
+  static parseSupportsList(rawSupportsStr) {
+    const parsed = CsvService.parseSupportsWithPrice(rawSupportsStr);
+    return parsed.map(p => p.reference);
   }
 
   /**
@@ -818,7 +873,8 @@ class CsvService {
             idTypeStatut = insStatut.rows[0].id;
           }
 
-          const supportsList = CsvService.parseSupportsList(rawSupports);
+          const parsedSupports = CsvService.parseSupportsWithPrice(rawSupports);
+          const supportsList = parsedSupports.map(s => s.reference);
 
           // 1. Validation de l'existence et détection des conflits de planning sur chaque support
           for (const supRef of supportsList) {
@@ -840,6 +896,33 @@ class CsvService {
               const finConflict = conflict.date_echeance ? new Date(conflict.date_echeance).toLocaleDateString('fr-FR') : '';
               throw new Error(`Conflit de planning : le support '${supRef}' est déjà réservé par le contrat '${conflict.reference}' (${conflict.raison_sociale || 'Client'}) du ${debConflict} au ${finConflict}.`);
             }
+          }
+
+          // Détermination du tarif global et des prix unitaires par support
+          const totalSupportsPrix = parsedSupports.reduce((sum, s) => sum + (s.prix_support !== null ? s.prix_support : 0), 0);
+          const hasAnySupportPrice = parsedSupports.some(s => s.prix_support !== null && s.prix_support > 0);
+
+          let finalTarif = 0;
+          if (hasAnySupportPrice || totalSupportsPrix > 0) {
+            finalTarif = totalSupportsPrix;
+            parsedSupports.forEach(s => {
+              if (s.prix_support === null) s.prix_support = 0;
+            });
+          } else if (tarifClean > 0) {
+            finalTarif = tarifClean;
+            if (parsedSupports.length === 1) {
+              parsedSupports[0].prix_support = finalTarif;
+            } else if (parsedSupports.length > 1) {
+              const prixUnitaire = Math.round((finalTarif / parsedSupports.length) * 100) / 100;
+              parsedSupports.forEach(s => {
+                s.prix_support = prixUnitaire;
+              });
+            }
+          } else {
+            finalTarif = 0;
+            parsedSupports.forEach(s => {
+              s.prix_support = 0;
+            });
           }
 
           // Détermination et normalisation de la périodicité
@@ -874,7 +957,7 @@ class CsvService {
               tarif, periodicite, date_debut, date_echeance, reconduction_tacite
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE)
-          `, [refAbo, clientId, commercialId, annonceur, tarifClean, finalPeriodicite, dateDebutRaw, dateEcheanceRaw]);
+          `, [refAbo, clientId, commercialId, annonceur, finalTarif, finalPeriodicite, dateDebutRaw, dateEcheanceRaw]);
           rapport.abonnementsCrees++;
 
           // 3. Statut initial de l'abonnement
@@ -883,13 +966,14 @@ class CsvService {
             VALUES ($1, $2, $3, $4, $5)
           `, [refAbo, idTypeStatut, dateDebutRaw, commercialId, 'Initialisé via import CSV']);
 
-          // 4. Liaisons physiques Abonnement_Support
-          for (const supRef of supportsList) {
+          // 4. Liaisons physiques Abonnement_Support avec prix unitaire
+          for (const sup of parsedSupports) {
             await clientDb.query(`
-              INSERT INTO Abonnement_Support (id_abonnement, reference_support)
-              VALUES ($1, $2)
-              ON CONFLICT (id_abonnement, reference_support) DO NOTHING
-            `, [refAbo, supRef]);
+              INSERT INTO Abonnement_Support (id_abonnement, reference_support, prix_support)
+              VALUES ($1, $2, $3)
+              ON CONFLICT (id_abonnement, reference_support) 
+              DO UPDATE SET prix_support = EXCLUDED.prix_support
+            `, [refAbo, sup.reference, sup.prix_support || 0]);
             rapport.supportsLies++;
           }
 

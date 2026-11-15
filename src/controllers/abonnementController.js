@@ -47,6 +47,15 @@ class AbonnementController {
     }
   }
 
+  static async getSupports(req, res) {
+    try {
+      const supports = await AbonnementService.getSupportsByAbonnement(req.params.id);
+      return res.status(200).json({ status: 'success', count: supports.length, data: supports });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  }
+
   static async getHistoriqueStatuts(req, res) {
     try {
       const historiqueStatuts = await AbonnementService.getHistoriqueStatuts(req.params.id);

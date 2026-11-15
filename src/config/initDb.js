@@ -123,6 +123,7 @@ async function initDatabase() {
     CREATE TABLE IF NOT EXISTS Abonnement_Support (
         id_abonnement VARCHAR(50) NOT NULL REFERENCES Abonnement(reference) ON DELETE CASCADE,
         reference_support VARCHAR(50) NOT NULL REFERENCES Support(reference) ON DELETE CASCADE,
+        prix_support NUMERIC(15, 2) DEFAULT 0,
         PRIMARY KEY (id_abonnement, reference_support)
     );
 
@@ -301,6 +302,12 @@ async function initDatabase() {
     await db.query('ALTER TABLE Abonnement DROP COLUMN IF EXISTS probabilite_renouvellement;');
   } catch {
     // Ignorer si l'utilisateur DB n'est pas propriétaire de la table
+  }
+
+  try {
+    await db.query('ALTER TABLE Abonnement_Support ADD COLUMN IF NOT EXISTS prix_support NUMERIC(15, 2) DEFAULT 0;');
+  } catch {
+    // Ignorer si déjà existant
   }
 
   try {

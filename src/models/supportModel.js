@@ -92,6 +92,11 @@ class SupportModel {
         es.date_debut AS date_etat,
         es.date_debut AS date_debut_etat,
         es.date_fin AS date_fin_etat,
+        res_abo.reservation_ref_abo,
+        res_abo.reservation_client_nom,
+        res_abo.reservation_date_debut,
+        res_abo.reservation_date_fin,
+        res_abo.reservation_campagne,
         1 AS quantite
       FROM Support s
       LEFT JOIN Zone_Terminal zt ON s.id_zone = zt.id
@@ -114,6 +119,34 @@ class SupportModel {
         ORDER BY es.id DESC
         LIMIT 1
       ) es ON true
+      LEFT JOIN LATERAL (
+        SELECT 
+          a.reference AS reservation_ref_abo,
+          a.date_debut AS reservation_date_debut,
+          a.date_echeance AS reservation_date_fin,
+          COALESCE(cl.raison_sociale, 'Client standard') AS reservation_client_nom,
+          a.annonceur_campagne AS reservation_campagne
+        FROM Abonnement_Support asup
+        JOIN Abonnement a ON asup.id_abonnement = a.reference
+        LEFT JOIN Client cl ON a.id_client = cl.id
+        LEFT JOIN LATERAL (
+          SELECT tsa2.nom_statut
+          FROM Statut_Abonnement sa2
+          JOIN Type_Statut_Abonnement tsa2 ON sa2.id_type_statut = tsa2.id
+          WHERE sa2.id_abonnement = a.reference
+          ORDER BY sa2.id DESC
+          LIMIT 1
+        ) tsa ON true
+        WHERE asup.reference_support = s.reference
+          AND COALESCE(tsa.nom_statut, 'Actif') NOT ILIKE '%archiv%'
+          AND COALESCE(tsa.nom_statut, 'Actif') NOT ILIKE '%resili%'
+          AND COALESCE(tsa.nom_statut, 'Actif') NOT ILIKE '%annul%'
+          AND COALESCE(tsa.nom_statut, 'Actif') NOT ILIKE '%expir%'
+        ORDER BY 
+          CASE WHEN a.date_debut <= CURRENT_TIMESTAMP AND a.date_echeance >= CURRENT_TIMESTAMP THEN 0 ELSE 1 END,
+          a.date_debut ASC
+        LIMIT 1
+      ) res_abo ON true
       ${whereClause}
       ORDER BY s.reference ASC
       ${paginationClause}
@@ -150,6 +183,11 @@ class SupportModel {
         es.date_debut AS date_etat,
         es.date_debut AS date_debut_etat,
         es.date_fin AS date_fin_etat,
+        res_abo.reservation_ref_abo,
+        res_abo.reservation_client_nom,
+        res_abo.reservation_date_debut,
+        res_abo.reservation_date_fin,
+        res_abo.reservation_campagne,
         1 AS quantite
       FROM Support s
       LEFT JOIN Zone_Terminal zt ON s.id_zone = zt.id
@@ -172,6 +210,34 @@ class SupportModel {
         ORDER BY es.id DESC
         LIMIT 1
       ) es ON true
+      LEFT JOIN LATERAL (
+        SELECT 
+          a.reference AS reservation_ref_abo,
+          a.date_debut AS reservation_date_debut,
+          a.date_echeance AS reservation_date_fin,
+          COALESCE(cl.raison_sociale, 'Client standard') AS reservation_client_nom,
+          a.annonceur_campagne AS reservation_campagne
+        FROM Abonnement_Support asup
+        JOIN Abonnement a ON asup.id_abonnement = a.reference
+        LEFT JOIN Client cl ON a.id_client = cl.id
+        LEFT JOIN LATERAL (
+          SELECT tsa2.nom_statut
+          FROM Statut_Abonnement sa2
+          JOIN Type_Statut_Abonnement tsa2 ON sa2.id_type_statut = tsa2.id
+          WHERE sa2.id_abonnement = a.reference
+          ORDER BY sa2.id DESC
+          LIMIT 1
+        ) tsa ON true
+        WHERE asup.reference_support = s.reference
+          AND COALESCE(tsa.nom_statut, 'Actif') NOT ILIKE '%archiv%'
+          AND COALESCE(tsa.nom_statut, 'Actif') NOT ILIKE '%resili%'
+          AND COALESCE(tsa.nom_statut, 'Actif') NOT ILIKE '%annul%'
+          AND COALESCE(tsa.nom_statut, 'Actif') NOT ILIKE '%expir%'
+        ORDER BY 
+          CASE WHEN a.date_debut <= CURRENT_TIMESTAMP AND a.date_echeance >= CURRENT_TIMESTAMP THEN 0 ELSE 1 END,
+          a.date_debut ASC
+        LIMIT 1
+      ) res_abo ON true
       WHERE s.reference = $1
     `;
     const { rows } = await db.query(query, [reference]);

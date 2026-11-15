@@ -199,6 +199,8 @@ class AbonnementModel {
         a.date_echeance AS date_fin,
         COALESCE(sup.supports_list, '') AS supports_associes,
         COALESCE(sup.first_support, '') AS reference_emplacement,
+        COALESCE(sup.supports_details, '[]'::json) AS supports_details,
+        COALESCE(sup.supports_details, '[]'::json) AS supports,
         COALESCE(st.statut, 'actif') AS statut_abonnement,
         COALESCE(st.statut, 'actif') AS statut,
         st.id_type_statut,
@@ -211,10 +213,17 @@ class AbonnementModel {
       LEFT JOIN Utilisateur u ON a.id_commercial = u.id
       LEFT JOIN LATERAL (
         SELECT 
-          STRING_AGG(reference_support, ', ' ORDER BY reference_support) AS supports_list,
-          (ARRAY_AGG(reference_support ORDER BY reference_support))[1] AS first_support
-        FROM Abonnement_Support
-        WHERE id_abonnement = a.reference
+          STRING_AGG(asup.reference_support, ', ' ORDER BY asup.reference_support) AS supports_list,
+          (ARRAY_AGG(asup.reference_support ORDER BY asup.reference_support))[1] AS first_support,
+          COALESCE(JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'reference_support', asup.reference_support,
+              'reference', asup.reference_support,
+              'prix_support', COALESCE(asup.prix_support, 0)
+            ) ORDER BY asup.reference_support
+          ) FILTER (WHERE asup.reference_support IS NOT NULL), '[]'::json) AS supports_details
+        FROM Abonnement_Support asup
+        WHERE asup.id_abonnement = a.reference
       ) sup ON true
       LEFT JOIN LATERAL (
         SELECT sa.id_type_statut, tsa.nom_statut AS statut, sa.commentaire, sa.date_debut
@@ -258,6 +267,8 @@ class AbonnementModel {
         a.date_echeance AS date_fin,
         COALESCE(sup.supports_list, '') AS supports_associes,
         COALESCE(sup.first_support, '') AS reference_emplacement,
+        COALESCE(sup.supports_details, '[]'::json) AS supports_details,
+        COALESCE(sup.supports_details, '[]'::json) AS supports,
         COALESCE(st.statut, 'actif') AS statut_abonnement,
         COALESCE(st.statut, 'actif') AS statut,
         st.id_type_statut,
@@ -270,10 +281,17 @@ class AbonnementModel {
       LEFT JOIN Utilisateur u ON a.id_commercial = u.id
       LEFT JOIN LATERAL (
         SELECT 
-          STRING_AGG(reference_support, ', ' ORDER BY reference_support) AS supports_list,
-          (ARRAY_AGG(reference_support ORDER BY reference_support))[1] AS first_support
-        FROM Abonnement_Support
-        WHERE id_abonnement = a.reference
+          STRING_AGG(asup.reference_support, ', ' ORDER BY asup.reference_support) AS supports_list,
+          (ARRAY_AGG(asup.reference_support ORDER BY asup.reference_support))[1] AS first_support,
+          COALESCE(JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'reference_support', asup.reference_support,
+              'reference', asup.reference_support,
+              'prix_support', COALESCE(asup.prix_support, 0)
+            ) ORDER BY asup.reference_support
+          ) FILTER (WHERE asup.reference_support IS NOT NULL), '[]'::json) AS supports_details
+        FROM Abonnement_Support asup
+        WHERE asup.id_abonnement = a.reference
       ) sup ON true
       LEFT JOIN LATERAL (
         SELECT sa.id_type_statut, tsa.nom_statut AS statut, sa.commentaire, sa.date_debut
@@ -403,7 +421,7 @@ class AbonnementModel {
 
     const finalClient = parseInt(id_client, 10);
     const finalCommercial = id_commercial ? parseInt(id_commercial, 10) : 1;
-    const finalTarif = Math.max(0, parseFloat(tarif) || 0);
+    let finalTarif = Math.max(0, parseFloat(tarif) || 0);
     const finalDateDebut = date_debut || new Date();
     const finalDateEcheance = date_echeance || date_fin || new Date();
 
@@ -413,15 +431,48 @@ class AbonnementModel {
       throw error;
     }
 
-    const allSupports = [];
-    if (reference_support) allSupports.push(reference_support);
-    if (reference_emplacement && !allSupports.includes(reference_emplacement)) allSupports.push(reference_emplacement);
+    // Normalisation des supports avec leur prix respectif
+    const supportsWithPrice = [];
     if (Array.isArray(supports)) {
       supports.forEach(s => {
         const refStr = typeof s === 'string' ? s.trim() : (s.reference_support || s.reference || '').trim();
-        if (refStr && !allSupports.includes(refStr)) allSupports.push(refStr);
+        const price = (s && typeof s === 'object' && s.prix_support !== undefined && s.prix_support !== null && s.prix_support !== '')
+          ? (parseFloat(s.prix_support) || 0)
+          : null;
+        if (refStr && !supportsWithPrice.some(item => item.reference === refStr)) {
+          supportsWithPrice.push({ reference: refStr, prix_support: price });
+        }
       });
     }
+    if (reference_support) {
+      const refStr = String(reference_support).trim();
+      if (!supportsWithPrice.some(item => item.reference === refStr)) {
+        supportsWithPrice.push({ reference: refStr, prix_support: null });
+      }
+    }
+    if (reference_emplacement) {
+      const refStr = String(reference_emplacement).trim();
+      if (!supportsWithPrice.some(item => item.reference === refStr)) {
+        supportsWithPrice.push({ reference: refStr, prix_support: null });
+      }
+    }
+
+    // Calcul du tarif total à partir des prix des supports
+    const totalSupportsPrix = supportsWithPrice.reduce((sum, s) => sum + (s.prix_support || 0), 0);
+    if (totalSupportsPrix > 0) {
+      finalTarif = totalSupportsPrix;
+    } else if (tarif !== undefined && tarif !== null && tarif !== '') {
+      finalTarif = Math.max(0, parseFloat(tarif) || 0);
+      if (supportsWithPrice.length === 1 && supportsWithPrice[0].prix_support === null) {
+        supportsWithPrice[0].prix_support = finalTarif;
+      }
+    }
+
+    supportsWithPrice.forEach(s => {
+      if (s.prix_support === null || isNaN(s.prix_support)) s.prix_support = 0;
+    });
+
+    const allSupports = supportsWithPrice.map(s => s.reference);
 
     for (const supRef of allSupports) {
       const conflict = await this.checkSupportConflict({
@@ -484,12 +535,18 @@ class AbonnementModel {
       motif_non_renouvellement || null
     ]);
 
-    for (const supRef of allSupports) {
+    for (const sup of supportsWithPrice) {
       await db.query(`
-        INSERT INTO Abonnement_Support (id_abonnement, reference_support)
-        VALUES ($1, $2)
-        ON CONFLICT DO NOTHING
-      `, [finalRef, supRef]);
+        INSERT INTO Abonnement_Support (id_abonnement, reference_support, prix_support)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (id_abonnement, reference_support) 
+        DO UPDATE SET prix_support = EXCLUDED.prix_support
+      `, [finalRef, sup.reference, sup.prix_support]);
+    }
+
+    // Si des prix individuels ont été saisis, synchroniser le tarif global avec la somme exacte
+    if (totalSupportsPrix > 0) {
+      await db.query('UPDATE Abonnement SET tarif = $1 WHERE reference = $2', [totalSupportsPrix, finalRef]);
     }
 
     const resolvedIdStatut = await this.resolveIdTypeStatut(id_type_statut || statut || 3);
@@ -583,20 +640,30 @@ class AbonnementModel {
       throw error;
     }
 
+    let calculatedTarif = null;
+
     if (supports !== undefined && Array.isArray(supports)) {
       const currentStatut = String(currentAbo.statut_abonnement || currentAbo.statut || '').trim().toLowerCase();
       const isLocked = currentStatut.includes('actif') || currentStatut.includes('archiv');
 
       const currentSupportsRows = await db.query(
-        'SELECT reference_support FROM Abonnement_Support WHERE id_abonnement = $1',
+        'SELECT reference_support, prix_support FROM Abonnement_Support WHERE id_abonnement = $1',
         [reference]
       );
       const currentSupList = currentSupportsRows.rows.map(r => r.reference_support).sort();
-      const newSupList = [...new Set(supports.map(s => String(s).trim()).filter(Boolean))].sort();
 
-      const hasChanged = JSON.stringify(currentSupList) !== JSON.stringify(newSupList);
+      const supportsWithPrice = supports.map(s => {
+        const ref = typeof s === 'string' ? s.trim() : String(s.reference_support || s.reference || '').trim();
+        const price = (s && typeof s === 'object' && s.prix_support !== undefined && s.prix_support !== null && s.prix_support !== '')
+          ? (parseFloat(s.prix_support) || 0)
+          : 0;
+        return { reference: ref, prix_support: price };
+      }).filter(s => Boolean(s.reference));
 
-      if (hasChanged && isLocked) {
+      const newSupList = [...new Set(supportsWithPrice.map(s => s.reference))].sort();
+      const hasSupListChanged = JSON.stringify(currentSupList) !== JSON.stringify(newSupList);
+
+      if (hasSupListChanged && isLocked) {
         const error = new Error(
           "Le contrat est déjà actif (ou archivé) : la modification des supports liés requiert une autorisation de l'administrateur."
         );
@@ -622,15 +689,21 @@ class AbonnementModel {
         }
       }
 
-      if (hasChanged) {
-        await db.query('DELETE FROM Abonnement_Support WHERE id_abonnement = $1', [reference]);
-        for (const supRef of newSupList) {
-          await db.query(
-            'INSERT INTO Abonnement_Support (id_abonnement, reference_support) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-            [reference, supRef]
-          );
-        }
+      await db.query('DELETE FROM Abonnement_Support WHERE id_abonnement = $1', [reference]);
+      for (const sup of supportsWithPrice) {
+        await db.query(
+          `INSERT INTO Abonnement_Support (id_abonnement, reference_support, prix_support) 
+           VALUES ($1, $2, $3) 
+           ON CONFLICT (id_abonnement, reference_support) DO UPDATE SET prix_support = EXCLUDED.prix_support`,
+          [reference, sup.reference, sup.prix_support]
+        );
       }
+
+      const sumResult = await db.query(
+        'SELECT COALESCE(SUM(prix_support), 0) AS total FROM Abonnement_Support WHERE id_abonnement = $1',
+        [reference]
+      );
+      calculatedTarif = parseFloat(sumResult.rows[0]?.total || 0);
     } else {
       const supRef = reference_support || reference_emplacement;
       if (supRef) {
@@ -713,7 +786,7 @@ class AbonnementModel {
       id_client ? parseInt(id_client, 10) : null,
       id_commercial ? parseInt(id_commercial, 10) : null,
       annonceur_campagne !== undefined ? annonceur_campagne : null,
-      tarif !== undefined ? parseFloat(tarif) : null,
+      calculatedTarif !== null ? calculatedTarif : (tarif !== undefined ? parseFloat(tarif) : null),
       devise || null,
       periodicite || null,
       date_debut || null,
@@ -884,6 +957,8 @@ class AbonnementModel {
     const query = `
       SELECT 
         s.reference,
+        s.reference AS reference_support,
+        COALESCE(asup.prix_support, 0) AS prix_support,
         s.id_zone,
         s.id_categorie,
         s.id_type,
@@ -895,6 +970,7 @@ class AbonnementModel {
       LEFT JOIN Type_Support ts ON s.id_type = ts.id
       LEFT JOIN Zone_Terminal zt ON s.id_zone = zt.id
       WHERE asup.id_abonnement = $1
+      ORDER BY s.reference ASC
     `;
     const { rows } = await db.query(query, [reference]);
     return rows;
