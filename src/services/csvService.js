@@ -232,7 +232,7 @@ class CsvService {
     }
   }
 
-  static async processInfrastructureCsv(filePath) {
+  static async processInfrastructureCsv(filePath, idUtilisateur = null) {
     // NIVEAU 0 : FORMAT & VÉRIFICATION DU FICHIER
     if (!fs.existsSync(filePath)) {
       throw new Error("Le fichier temporaire n'a pas été trouvé sur le serveur.");
@@ -475,6 +475,7 @@ class CsvService {
       await clientDb.query('COMMIT');
 
       await JournalNotificationModel.logAction({
+        id_utilisateur: idUtilisateur,
         categorie_action: 'IMPORT',
         entite_concernee: 'SUPPORT',
         reference_entite: 'CSV_INFRASTRUCTURE',
@@ -501,7 +502,7 @@ class CsvService {
     }
   }
 
-  static async processClientCsv(filePath) {
+  static async processClientCsv(filePath, idUtilisateur = null) {
     if (!fs.existsSync(filePath)) {
       throw new Error("Le fichier temporaire n'a pas été trouvé sur le serveur.");
     }
@@ -694,6 +695,7 @@ class CsvService {
       await clientDb.query('COMMIT');
 
       await JournalNotificationModel.logAction({
+        id_utilisateur: idUtilisateur,
         categorie_action: 'IMPORT',
         entite_concernee: 'CLIENT',
         reference_entite: 'CSV_CLIENTS',
@@ -723,7 +725,7 @@ class CsvService {
 
   }
 
-  static async processAbonnementCsv(filePath) {
+  static async processAbonnementCsv(filePath, idUtilisateur = null) {
     if (!fs.existsSync(filePath)) {
       throw new Error("Le fichier temporaire n'a pas été trouvé sur le serveur.");
     }
@@ -1001,6 +1003,7 @@ class CsvService {
       await clientDb.query('COMMIT');
 
       await JournalNotificationModel.logAction({
+        id_utilisateur: idUtilisateur,
         categorie_action: 'IMPORT',
         entite_concernee: 'ABONNEMENT',
         reference_entite: 'CSV_ABONNEMENTS',
