@@ -5,6 +5,50 @@ const bcrypt = require('bcryptjs');
  * Initialise l'ensemble des tables PostgreSQL de la base de données AeroPub (schéma base_v3.sql)
  */
 async function initDatabase() {
+  // Pré-migrations de schéma indispensables avant l'exécution du script DDL global
+  // (notamment pour les bases existantes avec d'anciennes dénominations de colonnes)
+  try {
+    await db.query(`
+      DO $$ BEGIN
+        -- Migration table Modele_Courriel : code_modele -> code, titre -> nom
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'modele_courriel') THEN
+          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'modele_courriel' AND column_name = 'code_modele') THEN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'modele_courriel' AND column_name = 'code') THEN
+              ALTER TABLE Modele_Courriel RENAME COLUMN code_modele TO code;
+            END IF;
+          END IF;
+          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'modele_courriel' AND column_name = 'titre') THEN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'modele_courriel' AND column_name = 'nom') THEN
+              ALTER TABLE Modele_Courriel RENAME COLUMN titre TO nom;
+            END IF;
+          END IF;
+        END IF;
+
+        -- S'assurer de la présence de la contrainte unique sur code dans Modele_Courriel
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'modele_courriel' AND column_name = 'code') THEN
+          BEGIN
+            ALTER TABLE Modele_Courriel ADD CONSTRAINT unique_modele_courriel_code UNIQUE (code);
+          EXCEPTION
+            WHEN duplicate_table THEN NULL;
+            WHEN duplicate_object THEN NULL;
+            WHEN others THEN NULL;
+          END;
+        END IF;
+
+        -- Migration table Abonnement_Support : s'assurer que la colonne prix_support existe
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'abonnement_support') THEN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'abonnement_support' AND column_name = 'prix_support') THEN
+            ALTER TABLE Abonnement_Support ADD COLUMN prix_support NUMERIC(15, 2) DEFAULT 0;
+          END IF;
+        END IF;
+      EXCEPTION
+        WHEN others THEN NULL;
+      END $$;
+    `);
+  } catch (preMigrateErr) {
+    console.warn('⚠️ Avertissement pré-migration schéma :', preMigrateErr.message);
+  }
+
   const queryText = `
     -- 1. UTILISATEURS & DROITS
     CREATE TABLE IF NOT EXISTS Role (
