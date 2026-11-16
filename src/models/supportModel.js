@@ -25,7 +25,7 @@ class SupportModel {
   }
 
   static async getAll(filters = {}) {
-    const { limit, offset, search, id_zone, id_categorie, id_type, statut } = filters;
+    const { limit, offset, search, id_zone, id_categorie, id_type, statut, id_perimetre, id_aeroport } = filters;
     const conditions = [];
     const params = [];
 
@@ -35,6 +35,8 @@ class SupportModel {
         LOWER(s.reference) LIKE $${params.length} 
         OR LOWER(COALESCE(s.caracteristiques, '')) LIKE $${params.length}
         OR LOWER(COALESCE(zt.nom_zone, '')) LIKE $${params.length}
+        OR LOWER(COALESCE(peri.nom, '')) LIKE $${params.length}
+        OR LOWER(COALESCE(aero.nom, '')) LIKE $${params.length}
       )`);
     }
 
@@ -51,6 +53,16 @@ class SupportModel {
     if (id_type) {
       params.push(parseInt(id_type, 10));
       conditions.push(`s.id_type = $${params.length}`);
+    }
+
+    if (id_perimetre) {
+      params.push(parseInt(id_perimetre, 10));
+      conditions.push(`zt.id_perimetre = $${params.length}`);
+    }
+
+    if (id_aeroport) {
+      params.push(parseInt(id_aeroport, 10));
+      conditions.push(`zt.id_aeroport = $${params.length}`);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
