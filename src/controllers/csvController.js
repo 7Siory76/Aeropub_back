@@ -28,7 +28,7 @@ class CsvController {
       if (!req.file) {
         return res.status(400).json({ status: 'error', message: 'Aucun fichier CSV téléversé.' });
       }
-      const rapport = await CsvService.processInfrastructureCsv(req.file.path);
+      const rapport = await CsvService.processInfrastructureCsv(req.file.path, req.user?.id);
       return res.status(200).json({ status: 'success', data: rapport });
     } catch (error) {
       return sendError(res, error);
@@ -40,7 +40,7 @@ class CsvController {
       if (!req.file) {
         return res.status(400).json({ status: 'error', message: 'Aucun fichier CSV téléversé.' });
       }
-      const rapport = await CsvService.processClientCsv(req.file.path);
+      const rapport = await CsvService.processClientCsv(req.file.path, req.user?.id);
       return res.status(200).json({ status: 'success', data: rapport });
     } catch (error) {
       return sendError(res, error);
@@ -52,7 +52,7 @@ class CsvController {
       if (!req.file) {
         return res.status(400).json({ status: 'error', message: 'Aucun fichier CSV téléversé.' });
       }
-      const rapport = await CsvService.processAbonnementCsv(req.file.path);
+      const rapport = await CsvService.processAbonnementCsv(req.file.path, req.user?.id);
       return res.status(200).json({ status: 'success', data: rapport });
     } catch (error) {
       return sendError(res, error);

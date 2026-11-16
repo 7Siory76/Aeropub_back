@@ -34,6 +34,36 @@ app.use(cors()); // Autorise les requêtes Cross-Origin
 app.use(express.json()); // Parsing des corps de requêtes JSON
 app.use(express.urlencoded({ extended: true }));
 
+// Initialisation automatique à la demande de la base (indispensable pour Vercel / environnements Serverless)
+let isDbInitialized = false;
+let dbInitPromise = null;
+const ensureDbInitialized = async () => {
+  if (isDbInitialized) return;
+  if (!dbInitPromise) {
+    dbInitPromise = (async () => {
+      try {
+        if (process.env.DATABASE_URL) {
+          await initDatabase();
+          isDbInitialized = true;
+          console.log('✅ Base de données PostgreSQL AeroPub initialisée avec succès.');
+        }
+      } catch (err) {
+        console.warn('⚠️ Avertissement initialisation BDD serverless:', err.message);
+      } finally {
+        dbInitPromise = null;
+      }
+    })();
+  }
+  return dbInitPromise;
+};
+
+app.use(async (req, res, next) => {
+  if (!isDbInitialized && process.env.DATABASE_URL) {
+    await ensureDbInitialized();
+  }
+  next();
+});
+
 // Fichiers statiques publics (Pièces jointes et justificatifs)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
